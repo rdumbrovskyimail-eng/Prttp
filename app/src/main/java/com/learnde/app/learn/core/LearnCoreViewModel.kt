@@ -1232,6 +1232,11 @@ class LearnCoreViewModel @Inject constructor(
             if (responses.isNotEmpty() && liveClient.isReady) {
                 runCatching { liveClient.sendToolResponse(responses.toList()) }
                     .onFailure { logger.e("Learn: failed to send ToolResponse: ${it.message}") }
+
+                // ВАЖНО: Мы ответили модели, сейчас она начнет генерировать голос.
+                // Даем ей свежие 3.5 секунды на старт аудио.
+                lastModelActivityAtMs = System.currentTimeMillis()
+                startStuckTurnWatchdog()
             }
 
             if (event.calls.any { it.name == "finish_session" }) {
