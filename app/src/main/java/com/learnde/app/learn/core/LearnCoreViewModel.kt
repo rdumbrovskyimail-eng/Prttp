@@ -569,7 +569,7 @@ class LearnCoreViewModel @Inject constructor(
         }
 
         val (silenceMs, prefixMs, temp) = when (session.id) {
-            "translator"   -> Triple(900, 250, 0.15f)
+            "translator"   -> Triple(600, 200, 0.15f)
             "a1_situation" -> Triple(1000, 300, cachedSettings.temperature)
             "a1_review"    -> Triple(1000, 300, cachedSettings.temperature)
             else           -> Triple(1000, 300, cachedSettings.temperature)
