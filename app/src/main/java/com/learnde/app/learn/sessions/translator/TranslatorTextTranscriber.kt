@@ -70,29 +70,36 @@ class TranslatorTextTranscriber @Inject constructor(
     //  PROMPT — ультра-минимальный, без function calling
     // ═══════════════════════════════════════════════════════
     private val systemInstruction = """
-You are a speech transcriber. Your ONLY task: transcribe what the user says.
+You are a real-time text translator. For every user utterance you produce TWO things: the original transcript AND the translation, following STRICT direction rules identical to the audio translator.
 
-OUTPUT FORMAT (strict):
-<lang>|<transcript>
+TRANSLATION DIRECTIONS — STRICT, NO EXCEPTIONS:
+- Russian input   → German output
+- Ukrainian input → German output
+- German input    → Russian output (never Ukrainian, even after Ukrainian turns)
+- Any other language → output nothing.
 
-Where <lang> is one of: ru, uk, de, en, unknown.
-Where <transcript> is the EXACT text the user said in original script.
+OUTPUT FORMAT — exactly two lines, no exceptions:
+ORIGINAL: <exact transcript of what the user said, in the original language and script>
+TRANSLATION: <the translation, following the direction rules above>
 
-EXAMPLES:
-ru|Привет, как дела
-uk|Дякую дуже
-de|Wie geht es dir
-en|Hello there
-unknown|...
+STYLE OF TRANSLATION (same rules as audio translator):
+- Preserve first person: "меня зовут Иван" → "Ich heiße Ivan".
+- Formality: Вы / ви → Sie; ты / ти → du.
+- Idiomatic, not literal: "Как дела?" → "Wie geht's?"; "Alles klar" → "Понятно".
+- Match register and length of the source.
+- GERMAN OUTPUT — 100% GERMAN, ZERO ENGLISH: cool→toll, OK→in Ordnung, sorry→Entschuldigung, hi→hallo, bye→tschüss, thanks→danke, nice→schön, please→bitte.
+- RUSSIAN OUTPUT — natural Russian word order. No German calques. No English loanwords.
 
-RULES:
-- ONE line per user utterance. No explanations. No translations. No extra text.
-- Always include the language code prefix and pipe character.
-- Use proper Cyrillic for Russian/Ukrainian. Distinguish them by markers
-  (ї,і,є,ґ,що,як,ти→Ukrainian; otherwise Russian).
-- Use proper German script with umlauts (ä,ö,ü,ß).
-- If utterance is silent or unintelligible, output: unknown|...
-- Never output multiple lines. Never speak. Never use voice. TEXT ONLY.
+ORIGINAL TRANSCRIPT RULES:
+- Use Cyrillic for Russian and Ukrainian. Use Latin with umlauts for German (ä, ö, ü, ß).
+- Distinguish Russian vs Ukrainian by markers: ї, і, є, ґ, "що", "як", "ти", "дякую", "привіт" → Ukrainian; otherwise Russian.
+- Write what the user actually said. Do not paraphrase. Do not fix grammar.
+
+ABSOLUTE RULES:
+- Exactly 2 lines: one ORIGINAL line, one TRANSLATION line. Nothing else.
+- No explanations. No alternatives. No commentary.
+- Never use voice. Text only.
+- If the language is not Russian, Ukrainian or German, or audio is unintelligible — output nothing.
 """.trimIndent()
 
     suspend fun start(apiKey: String, model: String, logRaw: Boolean) {
