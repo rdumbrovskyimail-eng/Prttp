@@ -550,10 +550,18 @@ class LearnCoreViewModel @Inject constructor(
         }
     }
 
-    private fun buildLearnSessionConfig(session: LearnSession): SessionConfig {
-        val profile = runCatching {
-            enumValueOf<LatencyProfile>(cachedSettings.latencyProfile)
-        }.getOrDefault(LatencyProfile.UltraLow)
+    private fun buildLearnSessionConfig(session: Session): SessionConfig {
+        val isTranslator = session.id == "translator"
+
+        // ═══ THINKING ═══
+        // Translator — ВСЕГДА Off (хардкод, иначе перевод тормозит на 5-8 сек).
+        // Остальные сессии используют выбор пользователя из настроек.
+        val profile = if (isTranslator) {
+            LatencyProfile.Off
+        } else {
+            runCatching { enumValueOf<LatencyProfile>(cachedSettings.latencyProfile) }
+                .getOrDefault(LatencyProfile.UltraLow)
+        }
 
         val userInfo = buildString {
             if (cachedSettings.userName.isNotBlank()) append("Имя ученика: ${cachedSettings.userName}. ")
@@ -561,19 +569,15 @@ class LearnCoreViewModel @Inject constructor(
             if (cachedSettings.learningTopics.isNotBlank()) append("Интересные темы: ${cachedSettings.learningTopics}. ")
         }
 
-        val finalSystemInstruction = if (userInfo.isNotBlank() && session.id != "translator") {
+        val finalSystemInstruction = if (userInfo.isNotBlank() && !isTranslator) {
             "${session.systemInstruction}\n\n[ДАННЫЕ ПОЛЬЗОВАТЕЛЯ]:\n" +
                 "Обращайся к ученику по имени. Учитывай эти данные: $userInfo"
         } else {
             session.systemInstruction
         }
 
-        // v3.9: per-session tuning. Translator получает максимально агрессивные
-        // настройки скорости — VAD быстрый, temperature низкая, токенов мало.
-        val isTranslator = session.id == "translator"
-
         val (silenceMs, prefixMs, temp) = when (session.id) {
-            "translator"   -> Triple(350, 80, 0.05f)    // было 600/200/0.15
+            "translator"   -> Triple(350, 80, 0.05f)
             "a1_situation" -> Triple(1000, 300, cachedSettings.temperature)
             "a1_review"    -> Triple(1000, 300, cachedSettings.temperature)
             else           -> Triple(1000, 300, cachedSettings.temperature)
@@ -585,7 +589,6 @@ class LearnCoreViewModel @Inject constructor(
 
         val finalLanguageCode = if (isTranslator) "" else cachedSettings.languageCode
 
-        // Translator: быстрый голос Puck, минимум токенов, без thinking.
         val finalVoiceId = if (isTranslator) "Puck" else cachedSettings.voiceId
         val finalMaxTokens = if (isTranslator) 512 else cachedSettings.maxOutputTokens
         val finalTopP = if (isTranslator) 0.8f else cachedSettings.topP
@@ -622,9 +625,10 @@ class LearnCoreViewModel @Inject constructor(
             sendAudioStreamEnd = cachedSettings.sendAudioStreamEnd,
         ).also {
             logger.d(
-                "Learn: config for ${session.id}: silence=${finalSilenceMs}ms, " +
-                    "prefix=${prefixMs}ms, temp=$temp, voice=$finalVoiceId, " +
-                    "maxTok=$finalMaxTokens, outputTr=${cachedSettings.outputTranscription}"
+                "Learn: config for ${session.id}: profile=$profile " +
+                    "(thinking=${profile.thinkingLevel ?: "OFF"}), " +
+                    "silence=${finalSilenceMs}ms, prefix=${prefixMs}ms, temp=$temp, " +
+                    "voice=$finalVoiceId, maxTok=$finalMaxTokens"
             )
         }
     }
