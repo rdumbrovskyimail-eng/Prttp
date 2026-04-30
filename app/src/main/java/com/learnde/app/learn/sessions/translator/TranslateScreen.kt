@@ -100,6 +100,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.learnde.app.R
 import com.learnde.app.domain.model.ConversationMessage
+import com.learnde.app.learn.sessions.translator.TranslationPair
+import com.learnde.app.learn.sessions.translator.TranslationPairCodec
 import com.learnde.app.learn.core.LearnConnectionStatus
 import com.learnde.app.learn.core.LearnCoreIntent
 import com.learnde.app.learn.core.LearnCoreViewModel
@@ -296,9 +298,11 @@ private fun computeShowThinking(
 ): Boolean {
     if (!isActive || !isMicActive || isAiSpeaking) return false
     val last = transcript.lastOrNull() ?: return true
-    return when (last) {
-        is ConversationMessage.TranslationPair -> last.translatedText.isBlank()
-        is ConversationMessage.Text -> last.role == ConversationMessage.ROLE_USER
+    val pair = TranslationPairCodec.decode(last.text)
+    return if (pair != null) {
+        pair.translatedText.isBlank()
+    } else {
+        last.role == ConversationMessage.ROLE_USER
     }
 }
 
@@ -692,9 +696,11 @@ private fun FloatingTranscript(
             items = messages,
             key = { msg -> "${msg.timestamp}_${msg.role}" },
         ) { msg ->
-            when (msg) {
-                is ConversationMessage.TranslationPair -> TranslationPairBubble(pair = msg)
-                is ConversationMessage.Text            -> SimpleTextBubble(message = msg)
+            val pair = remember(msg.text) { TranslationPairCodec.decode(msg.text) }
+            if (pair != null) {
+                TranslationPairBubble(pair = pair)
+            } else {
+                SimpleTextBubble(message = msg)
             }
         }
         if (showThinking) {
@@ -708,7 +714,7 @@ private fun FloatingTranscript(
 // ═══════════════════════════════════════════════════════════
 @Composable
 private fun TranslationPairBubble(
-    pair: ConversationMessage.TranslationPair,
+    pair: TranslationPair,
 ) {
     val bubbleShape = RoundedCornerShape(
         topStart = 20.dp,
@@ -882,7 +888,7 @@ private fun InlineThinkingDots() {
 //  SIMPLE TEXT BUBBLE — fallback для редких Text сообщений
 // ═══════════════════════════════════════════════════════════
 @Composable
-private fun SimpleTextBubble(message: ConversationMessage.Text) {
+private fun SimpleTextBubble(message: ConversationMessage) {
     val text = message.text.trim()
     if (text.isEmpty()) return
 
