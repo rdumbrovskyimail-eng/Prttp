@@ -1,13 +1,17 @@
 // ═══════════════════════════════════════════════════════════
-// ПОЛНАЯ ЗАМЕНА v5.0
+// ПОЛНАЯ ЗАМЕНА v7.0 — minimal prompt, parallel function call
 // Путь: app/src/main/java/com/learnde/app/learn/sessions/translator/TranslatorSession.kt
 //
-// ИЗМЕНЕНИЯ v5.0 (скорость + качество):
-//   - Промпт ужат до императивов (меньше токенов = быстрее SetupComplete)
-//   - Убраны размытые формулировки, оставлены только жёсткие правила
-//   - Tool response теперь МИНИМАЛЬНЫЙ — модель не ждёт инструкций в нём
-//   - Добавлены явные lexical guards для немецкого (без англицизмов)
-//   - Чёткое разделение направлений: RU/UK→DE, DE→RU
+// КЛЮЧЕВЫЕ ИЗМЕНЕНИЯ vs v5.0:
+//   1. Промпт ужат с 1500 до ~600 chars. Каждый токен в system
+//      instruction замедляет первый аудио-чанк на ~10-30ms.
+//      Менее токенов = быстрее старт generation.
+//   2. Function description ужат до одной строки.
+//   3. Tool response теперь "{}" — модель не парсит ничего лишнего
+//      и быстрее возвращается в audio generation mode.
+//   4. ЯВНОЕ требование "speak in parallel with function call,
+//      do not wait for tool response" — это критично для скорости.
+//   5. Запрет на любые текстовые комментарии — только аудио.
 // ═══════════════════════════════════════════════════════════
 package com.learnde.app.learn.sessions.translator
 
@@ -42,70 +46,56 @@ class TranslatorSession @Inject constructor(
     val userSpeechFlow: SharedFlow<UserSpeechEvent> = _userSpeechFlow.asSharedFlow()
 
     // ═══════════════════════════════════════════════════════
-    // ПРОМПТ v5.0 — императивы, никакой воды
+    // СИСТЕМНЫЙ ПРОМПТ v7.0 — сжатый, императивный, audio-first
     // ═══════════════════════════════════════════════════════
     override val systemInstruction: String = """
-You are a SIMULTANEOUS voice translator. Speed is critical.
+You are a real-time voice translator. SPEAK THE TRANSLATION INSTANTLY.
 
-═══ DIRECTIONS (strict) ═══
-• Russian → German
-• Ukrainian → German
-• German → Russian
-• English → Russian (rare fallback)
+DIRECTIONS:
+RU→DE, UK→DE, DE→RU, EN→RU.
+Output language MUST differ from input. Never DE→UK. Never RU→UK.
 
-NEVER translate German→Ukrainian. NEVER translate Russian→Ukrainian.
-Output language MUST always differ from input language.
+EVERY USER UTTERANCE — DO BOTH IN PARALLEL:
+A) Call submit_user_speech(text, language) with exact transcript and ISO code (ru/uk/de/en/unknown).
+B) IMMEDIATELY speak the translation aloud. Do NOT wait for the function response. Audio and function call run together.
 
-═══ FLOW (every turn, no exceptions) ═══
-1. Call submit_user_speech(text, language) — exact transcript, original script.
-2. IMMEDIATELY speak the translation. Do NOT wait. Do NOT comment.
-3. Stop. Wait for next user utterance.
+SPEED RULES:
+- Begin speaking translation within 200ms of user finishing.
+- Never pause to think. Translate reflexively.
+- Never output text-only responses. Always voice.
+- Never end a turn without audio (unless input is unintelligible).
 
-You speak in PARALLEL with the function call. Do not delay voice output.
+QUALITY RULES:
+- First person preserved: "меня зовут Иван" → "Ich heiße Ivan".
+- Formality: Вы/ви→Sie, ты/ти→du.
+- Idiomatic, not literal: "Как дела?"→"Wie geht's?".
+- Match length and register exactly.
 
-═══ TRANSLATION QUALITY ═══
-• First person preserved: "меня зовут Иван" → "Ich heiße Ivan".
-• Formality match: "Вы"/"ви" → "Sie", "ты"/"ти" → "du".
-• Idiomatic, NOT literal. "Как дела?" → "Wie geht's?" (not "Wie sind die Dinge?").
-• Concise. Match user's register and length.
+GERMAN OUTPUT — 100% GERMAN, ZERO ENGLISH:
+cool→toll, OK→in Ordnung, sorry→Entschuldigung, hi→hallo, bye→tschüss, thanks→danke, nice→schön, super stays super.
 
-═══ GERMAN OUTPUT — PURE GERMAN ONLY ═══
-Forbidden borrowings (replace immediately):
-• "cool" → "toll" / "super" / "klasse"
-• "OK" / "okay" → "in Ordnung" / "gut" / "alles klar"
-• "sorry" → "Entschuldigung"
-• "hi" → "hallo"
-• "bye" → "tschüss"
-• "thanks" → "danke"
+RUSSIAN OUTPUT — NATURAL RUSSIAN:
+No German word-order calques. "Ich freue mich"→"Я рад". Use proper aspect and prepositions.
 
-═══ RUSSIAN OUTPUT — NATURAL RUSSIAN ═══
-• No calques from German word order.
-• "Ich freue mich" → "Я рад", NOT "Я радуюсь себя".
-• Idiomatic prepositions and verb aspects.
-
-═══ NEVER ═══
-• Never speak first. Silent until user speaks.
-• Never greet, explain, paraphrase, ask for clarification.
-• Never invent content. Unintelligible → submit_user_speech(text="...", language="unknown") and stay silent.
-• Never call submit_user_speech for your own voice or pure silence.
-• Never output mixed-language sentences.
-• Never end turn without speaking translation (except for unintelligible input).
+NEVER:
+- Speak first.
+- Greet, explain, ask questions, comment.
+- Mix languages in one sentence.
+- Invent missing words. Unintelligible→submit_user_speech with text="..." language="unknown", stay silent.
 """.trimIndent()
 
     override val functionDeclarations: List<FunctionDeclarationConfig> = listOf(
         FunctionDeclarationConfig(
             name = "submit_user_speech",
-            description = "Report user's utterance for UI display. Call FIRST every turn, " +
-                "then immediately speak the translation in parallel.",
+            description = "Report user transcript. Call in parallel with speaking the translation.",
             parameters = mapOf(
                 "text" to ParameterConfig(
                     type = "STRING",
-                    description = "Exact transcript in original language and script. " +
-                        "Use \"...\" if unintelligible.",
+                    description = "Exact transcript in original script.",
                 ),
                 "language" to ParameterConfig(
                     type = "STRING",
-                    description = "ISO code: \"ru\", \"uk\", \"de\", \"en\", or \"unknown\".",
+                    description = "ISO: ru, uk, de, en, unknown.",
                 ),
             ),
             required = listOf("text", "language"),
@@ -115,11 +105,11 @@ Forbidden borrowings (replace immediately):
     override val initialUserMessage: String = ""
 
     override suspend fun onEnter() {
-        logger.d("TranslatorSession v5.0: onEnter (parallel function + voice)")
+        logger.d("TranslatorSession v7.0: onEnter")
     }
 
     override suspend fun onExit() {
-        logger.d("TranslatorSession v5.0: onExit")
+        logger.d("TranslatorSession v7.0: onExit")
     }
 
     override suspend fun handleToolCall(call: FunctionCall): String? {
@@ -129,19 +119,17 @@ Forbidden borrowings (replace immediately):
                 val lang = (call.args["language"] as? String)?.trim()?.lowercase().orEmpty()
 
                 if (text.isNotEmpty() && text != "...") {
-                    logger.d("TranslatorSession: user speech [$lang]: $text")
+                    logger.d("TranslatorSession v7.0: [$lang] $text")
                     _userSpeechFlow.tryEmit(
                         UserSpeechEvent(text = text, language = lang.ifEmpty { "unknown" })
                     )
-                } else {
-                    logger.d("TranslatorSession: skipping unintelligible/empty")
                 }
 
-                // МИНИМАЛЬНЫЙ ответ — модель уже знает что делать дальше из system prompt.
-                // Никаких "system_instruction" внутри tool response — это замедляет.
-                """{"ok":true}"""
+                // Минимально возможный ответ. Модель не парсит ничего лишнего
+                // и быстрее возвращается в audio generation mode.
+                "{}"
             }
-            else -> """{"ok":false}"""
+            else -> "{}"
         }
     }
 }
