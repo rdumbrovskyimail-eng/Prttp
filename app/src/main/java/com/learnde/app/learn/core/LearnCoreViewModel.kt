@@ -550,11 +550,11 @@ class LearnCoreViewModel @Inject constructor(
         }
     }
 
-    private fun buildLearnSessionConfig(session: Session): SessionConfig {
+    private fun buildLearnSessionConfig(session: LearnSession): SessionConfig {
         val isTranslator = session.id == "translator"
 
         // ═══ THINKING ═══
-        // Translator — ВСЕГДА Off (хардкод, иначе перевод тормозит на 5-8 сек).
+        // Translator — ВСЕГДА Off (хардкод, иначе перевод тормозит).
         // Остальные сессии используют выбор пользователя из настроек.
         val profile = if (isTranslator) {
             LatencyProfile.Off
