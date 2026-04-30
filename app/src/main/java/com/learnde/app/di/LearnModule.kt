@@ -5,6 +5,7 @@ import com.learnde.app.data.GeminiLiveClient
 import com.learnde.app.domain.AudioEngine
 import com.learnde.app.domain.LiveClient
 import com.learnde.app.learn.core.LearnScope
+import com.learnde.app.learn.core.TranslatorTextScope
 import com.learnde.app.util.AppLogger
 import dagger.Module
 import dagger.Provides
@@ -14,8 +15,11 @@ import javax.inject.Singleton
 
 /**
  * Learn-специфичные инстансы LiveClient и AudioEngine.
- * Используются в LearnCoreViewModel через @LearnScope.
- * Полностью изолированы от Voice-инстансов (@VoiceScope).
+ *
+ * @LearnScope        — основной клиент для всех learn-сессий (audio modality).
+ * @TranslatorTextScope — параллельный клиент ТОЛЬКО для translator-сессии,
+ *                       работает в text modality, транскрибирует речь
+ *                       пользователя в чистый текст для UI.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -32,4 +36,10 @@ object LearnModule {
     @LearnScope
     fun provideLearnAudioEngine(logger: AppLogger): AudioEngine =
         AndroidAudioEngine(logger)
+
+    @Provides
+    @Singleton
+    @TranslatorTextScope
+    fun provideTranslatorTextLiveClient(logger: AppLogger): LiveClient =
+        GeminiLiveClient(logger)
 }
