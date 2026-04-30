@@ -704,6 +704,8 @@ class LearnCoreViewModel @Inject constructor(
         safeStopForegroundService()
 
         runCatching { liveClient.disconnect() }
+        // Останавливаем параллельный text-транскриптер (если был активен)
+        runCatching { translatorTextTranscriber.stop() }
         runCatching { session?.onExit() }
 
         transcriptChannel.trySend(TranscriptOp.UserTurnComplete)
@@ -817,6 +819,21 @@ class LearnCoreViewModel @Inject constructor(
             arbiter.release(ClientOwner.LEARN)
             activeSession = null
         }
+
+        // Параллельный transcriber только для translator-сессии
+        if (session.id == "translator") {
+            runCatching {
+                translatorTextTranscriber.start(
+                    apiKey = activeApiKey,
+                    model = cachedSettings.model,
+                    logRaw = false,
+                )
+            }.onFailure { e ->
+                logger.w("Learn: translator text-transcriber start failed: ${e.message}")
+                // Не критично: audio перевод продолжит работать без транскрипции
+            }
+        }
+
         logger.d("◀ Learn.startInternal — awaiting SetupComplete")
     }
 
@@ -868,7 +885,6 @@ class LearnCoreViewModel @Inject constructor(
                     val now = System.currentTimeMillis()
                     val sinceLastAi = now - lastAiAudioChunkAtMs
 
-                    // v3.7: на старте сессии используем расширенный tail
                     val effectiveTailMs = if (sessionReadyAtMs > 0L
                         && (now - sessionReadyAtMs) < INITIAL_SESSION_GUARD_MS) {
                         AI_AUDIO_TAIL_INITIAL_MS
@@ -879,6 +895,7 @@ class LearnCoreViewModel @Inject constructor(
                     val aiActuallyAudible = lastAiAudioChunkAtMs > 0L &&
                                             sinceLastAi < effectiveTailMs
 
+                    // Audio-клиент: с gate против echo
                     if (!aiActuallyAudible) {
                         liveClient.sendAudio(chunk)
                         if (droppedMicChunks > 0) {
@@ -887,6 +904,12 @@ class LearnCoreViewModel @Inject constructor(
                         }
                     } else {
                         droppedMicChunks++
+                    }
+
+                    // Text-транскриптер: без gate — он не воспроизводит звук, echo не страшен.
+                    // Получает каждый PCM-чанк независимо от состояния audio-клиента.
+                    if (activeSession?.id == "translator") {
+                        translatorTextTranscriber.sendAudio(chunk)
                     }
                 }
             }
