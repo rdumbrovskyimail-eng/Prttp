@@ -502,25 +502,22 @@ class LearnCoreViewModel @Inject constructor(
         }
     }
 
+    /**
+     * v3.9: function call submit_user_speech больше НЕ создаёт пузырь.
+     * Источник user-пузырей в translator — только TranslatorTextTranscriber
+     * (через observeTranslatorTextTranscripts). Это исключает дубли.
+     *
+     * Метод оставлен для логирования и совместимости с TranslatorSession,
+     * который может по-прежнему слать function call (мы его игнорируем).
+     */
     private fun observeTranslatorUserSpeech() {
         viewModelScope.launch {
             translatorSession.userSpeechFlow.collect { event ->
-                // Обрабатываем только если активна именно translator-сессия
                 if (activeSession?.id != "translator") return@collect
-                
-                logger.d("Learn: user speech via function call [${event.language}]: ${event.text}")
-                
-                transcriptMutex.withLock {
-                    val newMsg = ConversationMessage.user(event.text)
-                    val next = (transcriptBuffer + newMsg).takeLast(MAX_TRANSCRIPT_SIZE)
-                    transcriptBuffer = next
-                    _state.update { 
-                        it.copy(
-                            transcript = next,
-                            liveUserTranscript = ""
-                        ) 
-                    }
-                }
+                logger.d(
+                    "Learn: ignoring submit_user_speech function call " +
+                        "[${event.language}] \"${event.text}\" (transcriber is source of truth)"
+                )
             }
         }
     }
