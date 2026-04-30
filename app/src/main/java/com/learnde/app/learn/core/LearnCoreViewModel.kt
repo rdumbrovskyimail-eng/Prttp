@@ -61,8 +61,6 @@ import com.learnde.app.domain.model.GeminiEvent
 import com.learnde.app.domain.model.LatencyProfile
 import com.learnde.app.domain.model.SessionConfig
 import com.learnde.app.learn.domain.VocabularyViolation
-import com.learnde.app.learn.sessions.translator.TranslationPair
-import com.learnde.app.learn.sessions.translator.TranslationPairCodec
 import com.learnde.app.util.AppLogger
 import com.learnde.app.util.UiText
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -502,62 +500,54 @@ class LearnCoreViewModel @Inject constructor(
         }
     }
 
-    /**
-     * v3.9: function call submit_user_speech больше НЕ создаёт пузырь.
-     * Источник user-пузырей в translator — только TranslatorTextTranscriber
-     * (через observeTranslatorTextTranscripts). Это исключает дубли.
-     *
-     * Метод оставлен для логирования и совместимости с TranslatorSession,
-     * который может по-прежнему слать function call (мы его игнорируем).
-     */
     private fun observeTranslatorUserSpeech() {
         viewModelScope.launch {
             translatorSession.userSpeechFlow.collect { event ->
+                // Обрабатываем только если активна именно translator-сессия
                 if (activeSession?.id != "translator") return@collect
-                logger.d(
-                    "Learn: ignoring submit_user_speech function call " +
-                        "[${event.language}] \"${event.text}\" (transcriber is source of truth)"
-                )
+                
+                logger.d("Learn: user speech via function call [${event.language}]: ${event.text}")
+                
+                transcriptMutex.withLock {
+                    val newMsg = ConversationMessage.user(event.text)
+                    val next = (transcriptBuffer + newMsg).takeLast(MAX_TRANSCRIPT_SIZE)
+                    transcriptBuffer = next
+                    _state.update { 
+                        it.copy(
+                            transcript = next,
+                            liveUserTranscript = ""
+                        ) 
+                    }
+                }
             }
         }
     }
 
-    /**
-     * v3.9: транскрибер теперь даёт пару (оригинал, перевод) одним событием.
-     * Каждое событие — новый пузырь, без обновления предыдущих. Пара
-     * хранится сериализованно в ConversationMessage.text — UI расшифрует.
-     *
-     * Это единственный источник user-пузырей в translator-режиме:
-     * - InputTranscript игнорируется (см. observeGeminiEvents)
-     * - submit_user_speech function call игнорируется (см. observeTranslatorUserSpeech)
-     * - OutputTranscript / ModelText игнорируются (см. observeGeminiEvents)
-     */
     private fun observeTranslatorTextTranscripts() {
         viewModelScope.launch {
             translatorTextTranscriber.transcripts.collect { event ->
+                // Только для активной translator-сессии
                 if (activeSession?.id != "translator") return@collect
 
-                logger.d(
-                    "Learn: translator pair [${event.originalLang}→${event.translatedLang}] " +
-                        "src=\"${event.originalText}\" dst=\"${event.translatedText}\""
-                )
-
-                val encoded = TranslationPairCodec.encode(
-                    TranslationPair(
-                        originalText = event.originalText,
-                        originalLang = event.originalLang,
-                        translatedText = event.translatedText,
-                        translatedLang = event.translatedLang,
-                    )
-                )
+                logger.d("Learn: text-transcriber [${event.language}]: ${event.text}")
 
                 transcriptMutex.withLock {
-                    val newMsg = ConversationMessage(
-                        role = ConversationMessage.ROLE_USER,
-                        text = encoded,
-                        timestamp = event.timestamp,
-                    )
-                    val next = (transcriptBuffer + newMsg).takeLast(MAX_TRANSCRIPT_SIZE)
+                    // Если последний user-пузырь свежий (< 5 сек) — обновляем его,
+                    // иначе добавляем новый. Это синхронизирует ASR-фоновое
+                    // обновление с финальным текстом от text-сессии.
+                    val lastUserIdx = transcriptBuffer.indexOfLast {
+                        it.role == ConversationMessage.ROLE_USER
+                    }
+                    val now = System.currentTimeMillis()
+                    val next = if (lastUserIdx >= 0
+                        && now - transcriptBuffer[lastUserIdx].timestamp < 5000) {
+                        transcriptBuffer.toMutableList().apply {
+                            set(lastUserIdx, transcriptBuffer[lastUserIdx].copy(text = event.text))
+                        }
+                    } else {
+                        (transcriptBuffer + ConversationMessage.user(event.text))
+                            .takeLast(MAX_TRANSCRIPT_SIZE)
+                    }
                     transcriptBuffer = next
                     _state.update {
                         it.copy(transcript = next, liveUserTranscript = "")
@@ -1090,15 +1080,13 @@ class LearnCoreViewModel @Inject constructor(
                             awaitingInitialGreeting = false
                             greetingFallbackJob?.cancel()
                         }
+                        // v3.7: если text пришёл, а audio ещё нет — стартуем
+                        // text-without-audio watchdog
                         if (lastAiAudioChunkAtMs == 0L
                             || (System.currentTimeMillis() - lastAiAudioChunkAtMs) > 500) {
                             startTextWithoutAudioWatchdog()
                         }
-                        // v3.9: для translator пузыри строит TranslatorTextTranscriber.
-                        // Output аудио-модели в UI не пускаем — был бы дубль перевода.
-                        if (activeSession?.id != "translator") {
-                            transcriptChannel.trySend(TranscriptOp.ModelDelta(event.text, "OutputTranscript"))
-                        }
+                        transcriptChannel.trySend(TranscriptOp.ModelDelta(event.text, "OutputTranscript"))
                     }
 
                     is GeminiEvent.ModelText -> {
@@ -1110,10 +1098,7 @@ class LearnCoreViewModel @Inject constructor(
                             || (System.currentTimeMillis() - lastAiAudioChunkAtMs) > 500) {
                             startTextWithoutAudioWatchdog()
                         }
-                        // v3.9: см. комментарий в OutputTranscript ветке
-                        if (activeSession?.id != "translator") {
-                            transcriptChannel.trySend(TranscriptOp.ModelDelta(event.text, "ModelText"))
-                        }
+                        transcriptChannel.trySend(TranscriptOp.ModelDelta(event.text, "ModelText"))
                     }
 
                     is GeminiEvent.ToolCall -> {
