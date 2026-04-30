@@ -1,48 +1,3 @@
-// ═══════════════════════════════════════════════════════════
-// ПОЛНАЯ ЗАМЕНА v3.8
-// Путь: app/src/main/java/com/learnde/app/learn/core/LearnCoreViewModel.kt
-//
-//   v3.8 (function-based user transcription для translator):
-//     - Транскрипция речи пользователя в режиме "translator" теперь
-//       приходит ОТ САМОЙ МОДЕЛИ через function call submit_user_speech,
-//       а не от ASR-канала InputTranscript.
-//     - ASR Google по-прежнему отвечает за транскрипцию голоса Gemini
-//       (OutputTranscript) — там он работает идеально.
-//     - Решает проблему иероглифов и кривой транскрипции на коротких
-//       фразах (1-3 слова) и при переключении укр↔рос.
-//     - Новая зависимость: TranslatorSession инжектится напрямую,
-//       чтобы подписаться на её userSpeechFlow.
-//
-// НОВОЕ В v3.7 (по результатам live-тестирования v3.6):
-//
-//   1. STUCK-TURN WATCHDOG (3500ms)
-//      Лечит главную проблему сессии 2: модель присылает первую
-//      дельту ("Hallo. Lass") и зависает на 10+ секунд. WS жив,
-//      но генерация заморожена.
-//      Решение: после первой model-дельты запускаем таймер. Если
-//      3500ms не пришло НИ новой дельты, НИ AudioChunk, НИ
-//      TurnComplete — принудительно финализируем turn локально.
-//      Юзер видит частичный перевод и может продолжать.
-//
-//   2. TEXT-WITHOUT-AUDIO DETECTOR
-//      Детектит когда OutputTranscript есть, а AudioChunk не идёт.
-//      Не блокирует UI, просто логирует и не закрывает mic gate
-//      (т.к. динамик не звучит — нет смысла гейтить мик).
-//
-//   3. ASR-GARBAGE SUPPRESSOR (опциональный, по флагу)
-//      Если cachedSettings.translatorSuppressShortAsrGarbage==true
-//      и в translator-режиме пришла КОРОТКАЯ латинская дельта
-//      без немецких маркеров (Hola, Pesa la otra, cocktail) —
-//      показываем пузырь как "…" с меткой ВЫ · ?
-//
-//   4. INITIAL-SESSION ECHO GUARD
-//      На первые 2 секунды после SetupComplete расширяем AI tail
-//      gate с 600ms до 1500ms. Защита от хвоста аудио прошлой
-//      сессии (баг 16:26:36 где модель ответила сама себе).
-//
-// СОВМЕСТИМОСТЬ: требуется одно новое поле в AppSettings:
-//   val translatorSuppressShortAsrGarbage: Boolean = true
-// ═══════════════════════════════════════════════════════════
 package com.learnde.app.learn.core
 
 import android.Manifest
@@ -100,10 +55,6 @@ class LearnCoreViewModel @Inject constructor(
 ) : ViewModel() {
 
     companion object {
-        private val cleanupScope = kotlinx.coroutines.CoroutineScope(
-            kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
-        )
-
         private const val MAX_TRANSCRIPT_SIZE = 150
         private const val LEARNER_SILENCE_THRESHOLD_MS = 10_000L
         private const val SILENCE_CHECK_WINDOW_MS = 9_000L
@@ -114,27 +65,12 @@ class LearnCoreViewModel @Inject constructor(
         private const val GREETING_FINAL_MS = 8_000L
         private const val SILENCE_PCM_BYTES = (2 * 16000 * 400) / 1000
         private const val AI_AUDIO_TAIL_MS = 600L
-
-        // v3.7: расширенный AI tail на старте сессии для защиты от echo
         private const val AI_AUDIO_TAIL_INITIAL_MS = 1_500L
         private const val INITIAL_SESSION_GUARD_MS = 2_000L
-
-        // v3.7: stuck-turn watchdog
         private const val STUCK_TURN_TIMEOUT_MS = 3_500L
-        // v3.7: text-without-audio detector
         private const val TEXT_WITHOUT_AUDIO_TIMEOUT_MS = 1_500L
-
         private const val SILENCE_PROMPT_COOLDOWN_MS = 30_000L
         private const val FINISH_SESSION_GRACE_MS = 5_000L
-
-        // v3.7: критерии "короткой латинской галлюцинации"
-        private const val ASR_GARBAGE_MAX_WORDS = 2
-        private const val ASR_GARBAGE_MAX_CHARS = 18
-
-        /** Опциональный фильтр коротких ASR-галлюцинаций в translator-режиме.
-         *  Если true — Hola/Pesa la otra/cocktail заменяются на "…" с меткой ВЫ · ?
-         *  Чтобы сделать тоглом — замените на cachedSettings.<flag> в трёх местах ниже. */
-        private const val TRANSLATOR_SUPPRESS_SHORT_ASR_GARBAGE = true
     }
 
     private val _state = MutableStateFlow(LearnCoreState())
@@ -164,7 +100,6 @@ class LearnCoreViewModel @Inject constructor(
     private var setupJob: Job? = null
     private var finishGraceJob: Job? = null
 
-    // v3.7: новые watchdog-джобы
     private var stuckTurnWatchdogJob: Job? = null
     private var textWithoutAudioJob: Job? = null
 
@@ -176,12 +111,8 @@ class LearnCoreViewModel @Inject constructor(
     @Volatile private var lastSilencePromptAtMs: Long = 0L
     @Volatile private var droppedMicChunks: Int = 0
 
-    // v3.7: timestamp последней любой активности от модели в текущем turn'е
-    // (audio ИЛИ output transcript). Используется watchdog'ом.
     @Volatile private var lastModelActivityAtMs: Long = 0L
-    // v3.7: timestamp когда сессия стала Ready (для initial echo guard)
     @Volatile private var sessionReadyAtMs: Long = 0L
-    // v3.7: модель уже прислала ХОТЯ БЫ что-то (audio или text) в этом turn'е
     @Volatile private var hasModelOutputThisTurn: Boolean = false
 
     private val transcriptMutex = Mutex()
@@ -202,9 +133,6 @@ class LearnCoreViewModel @Inject constructor(
     private val userTurnBuffer = StringBuilder()
     private val modelTurnBuffer = StringBuilder()
 
-    @Volatile private var lastRejectedUserDelta: String = ""
-
-    @Volatile private var liveUserMessageTs: Long = 0L
     @Volatile private var liveModelMessageTs: Long = 0L
 
     init {
@@ -213,7 +141,6 @@ class LearnCoreViewModel @Inject constructor(
         observeArbiter()
         observeVocabularyViolations()
         startTranscriptProcessor()
-        observeTranslatorUserSpeech()
         observeTranslatorTextTranscripts()
         viewModelScope.launch { audioEngine.initPlayback() }
     }
@@ -237,8 +164,6 @@ class LearnCoreViewModel @Inject constructor(
             is TranscriptOp.Reset -> {
                 userTurnBuffer.clear()
                 modelTurnBuffer.clear()
-                lastRejectedUserDelta = ""
-                liveUserMessageTs = 0L
                 liveModelMessageTs = 0L
             }
         }
@@ -254,8 +179,7 @@ class LearnCoreViewModel @Inject constructor(
                 userTurnBuffer.clear()
                 userTurnBuffer.append(text)
             }
-            current.contains(text) -> { 
-            }
+            current.contains(text) -> { }
             else -> {
                 userTurnBuffer.append(" ").append(text)
             }
@@ -271,10 +195,8 @@ class LearnCoreViewModel @Inject constructor(
         val bufferedText = userTurnBuffer.toString().trim()
         userTurnBuffer.clear()
 
-        // 1. Очищаем "живой" текст с экрана
         _state.update { it.copy(liveUserTranscript = "") }
 
-        // 2. Если текст был, сохраняем его как финальное сообщение в историю чата
         if (bufferedText.isNotEmpty()) {
             transcriptMutex.withLock {
                 val newMsg = ConversationMessage.user(bufferedText)
@@ -283,7 +205,6 @@ class LearnCoreViewModel @Inject constructor(
                 _state.update { it.copy(transcript = next) }
             }
         }
-        liveUserMessageTs = 0L
     }
 
     private suspend fun handleModelDelta(text: String, source: String) {
@@ -292,7 +213,6 @@ class LearnCoreViewModel @Inject constructor(
         if (cachedSettings.outputTranscription && source == "ModelText") return
         if (!cachedSettings.outputTranscription && source == "OutputTranscript") return
 
-        // v3.7: фиксируем активность для watchdog
         lastModelActivityAtMs = System.currentTimeMillis()
         hasModelOutputThisTurn = true
         startStuckTurnWatchdog()
@@ -316,51 +236,18 @@ class LearnCoreViewModel @Inject constructor(
         }
     }
 
-
-
     private suspend fun finalizeModelTurn() {
         val finalText = modelTurnBuffer.toString().trim()
         modelTurnBuffer.clear()
 
-        when {
-            finalText.isNotEmpty() && liveModelMessageTs != 0L -> {
-                updateBubbleByTs(liveModelMessageTs, finalText, ConversationMessage.ROLE_MODEL)
-            }
-            finalText.isNotEmpty() && liveModelMessageTs == 0L -> {
-                upsertLiveModelBubble(finalText)
-            }
+        if (finalText.isNotEmpty()) {
+            upsertLiveModelBubble(finalText)
         }
 
         liveModelMessageTs = 0L
         hasModelOutputThisTurn = false
         cancelStuckTurnWatchdog()
         cancelTextWithoutAudioWatchdog()
-    }
-
-    private suspend fun upsertLiveUserBubble(text: String) {
-        transcriptMutex.withLock {
-            if (liveUserMessageTs == 0L) {
-                val newMsg = ConversationMessage.user(text)
-                liveUserMessageTs = newMsg.timestamp
-                val next = (transcriptBuffer + newMsg).takeLast(MAX_TRANSCRIPT_SIZE)
-                transcriptBuffer = next
-                _state.update { it.copy(transcript = next) }
-            } else {
-                val idx = transcriptBuffer.indexOfLast { it.timestamp == liveUserMessageTs }
-                if (idx >= 0) {
-                    val updated = transcriptBuffer[idx].copy(text = text)
-                    val next = transcriptBuffer.toMutableList().apply { set(idx, updated) }
-                    transcriptBuffer = next
-                    _state.update { it.copy(transcript = next) }
-                } else {
-                    val newMsg = ConversationMessage.user(text)
-                    liveUserMessageTs = newMsg.timestamp
-                    val next = (transcriptBuffer + newMsg).takeLast(MAX_TRANSCRIPT_SIZE)
-                    transcriptBuffer = next
-                    _state.update { it.copy(transcript = next) }
-                }
-            }
-        }
     }
 
     private suspend fun upsertLiveModelBubble(text: String) {
@@ -397,59 +284,20 @@ class LearnCoreViewModel @Inject constructor(
         }
     }
 
-    private suspend fun updateBubbleByTs(ts: Long, finalText: String, role: String) {
-        transcriptMutex.withLock {
-            val idx = transcriptBuffer.indexOfLast { it.timestamp == ts && it.role == role }
-            if (idx >= 0) {
-                val updated = transcriptBuffer[idx].copy(text = finalText)
-                val next = transcriptBuffer.toMutableList().apply { set(idx, updated) }
-                transcriptBuffer = next
-                _state.update { it.copy(transcript = next) }
-            }
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════
-    //  v3.7: STUCK-TURN WATCHDOG
-    // ═══════════════════════════════════════════════════════
-
-    /**
-     * Запускается на КАЖДОЙ дельте от модели (audio или text).
-     * Если за STUCK_TURN_TIMEOUT_MS не пришло ничего нового и
-     * не пришёл TurnComplete — принудительно финализируем turn.
-     *
-     * Это решает баг native-audio модели Gemini Live где она
-     * иногда зависает в середине генерации (видели "Hallo. Lass"
-     * и тишину 10+ секунд).
-     */
     private fun startStuckTurnWatchdog() {
         stuckTurnWatchdogJob?.cancel()
         stuckTurnWatchdogJob = viewModelScope.launch {
             delay(STUCK_TURN_TIMEOUT_MS)
-            // Проверяем что watchdog ещё актуален
-            if (!hasModelOutputThisTurn) return@launch
-
-            val sinceLastActivity = System.currentTimeMillis() - lastModelActivityAtMs
-            if (sinceLastActivity >= STUCK_TURN_TIMEOUT_MS) {
-                logger.w("⚠ STUCK_TURN_DETECTED — no model activity for ${sinceLastActivity}ms, " +
-                    "force-finalizing")
-
-                // 1. Финализируем буферы (сохраняем то что успело прийти)
+            if (hasModelOutputThisTurn) {
+                logger.w("⚠ STUCK_TURN_DETECTED — force-finalizing")
                 transcriptChannel.trySend(TranscriptOp.UserTurnComplete)
                 transcriptChannel.trySend(TranscriptOp.ModelTurnComplete)
-
-                // 2. Чистим аудио (если что-то висит в очереди)
                 runCatching { audioEngine.flushPlayback() }
                 runCatching { audioEngine.onTurnComplete() }
-
-                // 3. Сбрасываем UI-состояние
                 modelStartedSpeakingThisTurn = false
                 hasModelOutputThisTurn = false
                 _state.update { it.copy(isAiSpeaking = false) }
-
-                // 4. Открываем mic gate (если был закрыт по AI tail)
                 lastAiAudioChunkAtMs = 0L
-
                 cancelTextWithoutAudioWatchdog()
             }
         }
@@ -460,22 +308,13 @@ class LearnCoreViewModel @Inject constructor(
         stuckTurnWatchdogJob = null
     }
 
-    /**
-     * Запускается когда пришёл OutputTranscript но AudioChunk не пришёл.
-     * Если за TEXT_WITHOUT_AUDIO_TIMEOUT_MS аудио так и не появилось —
-     * считаем что модель залипла в text-only режиме. Логируем и
-     * сбрасываем lastAiAudioChunkAtMs чтобы mic gate не блокировал.
-     */
     private fun startTextWithoutAudioWatchdog() {
         textWithoutAudioJob?.cancel()
         textWithoutAudioJob = viewModelScope.launch {
             delay(TEXT_WITHOUT_AUDIO_TIMEOUT_MS)
             val now = System.currentTimeMillis()
-            // Если модель всё ещё якобы "говорит", но AudioChunk
-            // не приходил — открываем mic gate.
             if (hasModelOutputThisTurn && (now - lastAiAudioChunkAtMs) > TEXT_WITHOUT_AUDIO_TIMEOUT_MS) {
-                logger.w("⚠ TEXT_WITHOUT_AUDIO — model outputs text but no audio, " +
-                    "opening mic gate proactively")
+                logger.w("⚠ TEXT_WITHOUT_AUDIO — opening mic gate proactively")
                 lastAiAudioChunkAtMs = 0L
                 _state.update { it.copy(isAiSpeaking = false) }
             }
@@ -486,8 +325,6 @@ class LearnCoreViewModel @Inject constructor(
         textWithoutAudioJob?.cancel()
         textWithoutAudioJob = null
     }
-
-
 
     private fun observeVocabularyViolations() {
         viewModelScope.launch {
@@ -500,64 +337,35 @@ class LearnCoreViewModel @Inject constructor(
         }
     }
 
-    private fun observeTranslatorUserSpeech() {
-        viewModelScope.launch {
-            translatorSession.userSpeechFlow.collect { event ->
-                // Обрабатываем только если активна именно translator-сессия
-                if (activeSession?.id != "translator") return@collect
-                
-                logger.d("Learn: user speech via function call [${event.language}]: ${event.text}")
-                
-                transcriptMutex.withLock {
-                    val newMsg = ConversationMessage.user(event.text)
-                    val next = (transcriptBuffer + newMsg).takeLast(MAX_TRANSCRIPT_SIZE)
-                    transcriptBuffer = next
-                    _state.update { 
-                        it.copy(
-                            transcript = next,
-                            liveUserTranscript = ""
-                        ) 
-                    }
-                }
-            }
-        }
-    }
-
     private fun observeTranslatorTextTranscripts() {
         viewModelScope.launch {
-            translatorTextTranscriber.transcripts.collect { event ->
-                // Только для активной translator-сессии
+            translatorTextTranscriber.events.collect { event ->
                 if (activeSession?.id != "translator") return@collect
 
-                logger.d("Learn: text-transcriber [${event.language}]: ${event.text}")
-
-                transcriptMutex.withLock {
-                    // Если последний user-пузырь свежий (< 5 сек) — обновляем его,
-                    // иначе добавляем новый. Это синхронизирует ASR-фоновое
-                    // обновление с финальным текстом от text-сессии.
-                    val lastUserIdx = transcriptBuffer.indexOfLast {
-                        it.role == ConversationMessage.ROLE_USER
-                    }
-                    val now = System.currentTimeMillis()
-                    val next = if (lastUserIdx >= 0
-                        && now - transcriptBuffer[lastUserIdx].timestamp < 5000) {
-                        transcriptBuffer.toMutableList().apply {
-                            set(lastUserIdx, transcriptBuffer[lastUserIdx].copy(text = event.text))
+                when (event) {
+                    is com.learnde.app.learn.sessions.translator.TranscriberEvent.LiveUpdate -> {
+                        if (event.original.isNotEmpty()) {
+                            _state.update { it.copy(liveUserTranscript = event.original) }
                         }
-                    } else {
-                        (transcriptBuffer + ConversationMessage.user(event.text))
-                            .takeLast(MAX_TRANSCRIPT_SIZE)
+                        if (event.translation.isNotEmpty()) {
+                            upsertLiveModelBubble(event.translation)
+                        }
                     }
-                    transcriptBuffer = next
-                    _state.update {
-                        it.copy(transcript = next, liveUserTranscript = "")
+                    is com.learnde.app.learn.sessions.translator.TranscriberEvent.FinalTurn -> {
+                        _state.update { it.copy(liveUserTranscript = "") }
+                        transcriptMutex.withLock {
+                            val userMsg = ConversationMessage.user(event.original)
+                            val modelMsg = ConversationMessage.model(event.translation)
+                            val next = (transcriptBuffer + userMsg + modelMsg).takeLast(MAX_TRANSCRIPT_SIZE)
+                            transcriptBuffer = next
+                            _state.update { it.copy(transcript = next) }
+                        }
+                        liveModelMessageTs = 0L
                     }
                 }
             }
         }
     }
-
-
 
     fun onIntent(intent: LearnCoreIntent) {
         when (intent) {
@@ -589,9 +397,6 @@ class LearnCoreViewModel @Inject constructor(
     private fun buildLearnSessionConfig(session: LearnSession): SessionConfig {
         val isTranslator = session.id == "translator"
 
-        // ═══ THINKING ═══
-        // Translator — ВСЕГДА Off (хардкод, иначе перевод тормозит).
-        // Остальные сессии используют выбор пользователя из настроек.
         val profile = if (isTranslator) {
             LatencyProfile.Off
         } else {
@@ -624,7 +429,6 @@ class LearnCoreViewModel @Inject constructor(
         else silenceMs
 
         val finalLanguageCode = if (isTranslator) "" else cachedSettings.languageCode
-
         val finalVoiceId = if (isTranslator) "Puck" else cachedSettings.voiceId
         val finalMaxTokens = if (isTranslator) 512 else cachedSettings.maxOutputTokens
         val finalTopP = if (isTranslator) 0.8f else cachedSettings.topP
@@ -659,14 +463,7 @@ class LearnCoreViewModel @Inject constructor(
             enableGoogleSearch = false,
             functionDeclarations = session.functionDeclarations,
             sendAudioStreamEnd = cachedSettings.sendAudioStreamEnd,
-        ).also {
-            logger.d(
-                "Learn: config for ${session.id}: profile=$profile " +
-                    "(thinking=${profile.thinkingLevel ?: "OFF"}), " +
-                    "silence=${finalSilenceMs}ms, prefix=${prefixMs}ms, temp=$temp, " +
-                    "voice=$finalVoiceId, maxTok=$finalMaxTokens"
-            )
-        }
+        )
     }
 
     private fun observeArbiter() {
@@ -682,10 +479,6 @@ class LearnCoreViewModel @Inject constructor(
             }
         }
     }
-
-    // ══════════════════════════════════════════════════════
-    //  START / STOP
-    // ══════════════════════════════════════════════════════
 
     private suspend fun stopInternal() = startStopMutex.withLock {
         logger.d("▶ Learn.stopInternal")
@@ -704,7 +497,6 @@ class LearnCoreViewModel @Inject constructor(
         safeStopForegroundService()
 
         runCatching { liveClient.disconnect() }
-        // Останавливаем параллельный text-транскриптер (если был активен)
         runCatching { translatorTextTranscriber.stop() }
         runCatching { session?.onExit() }
 
@@ -820,7 +612,6 @@ class LearnCoreViewModel @Inject constructor(
             activeSession = null
         }
 
-        // Параллельный transcriber только для translator-сессии
         if (session.id == "translator") {
             runCatching {
                 translatorTextTranscriber.start(
@@ -830,7 +621,6 @@ class LearnCoreViewModel @Inject constructor(
                 )
             }.onFailure { e ->
                 logger.w("Learn: translator text-transcriber start failed: ${e.message}")
-                // Не критично: audio перевод продолжит работать без транскрипции
             }
         }
 
@@ -895,21 +685,17 @@ class LearnCoreViewModel @Inject constructor(
                     val aiActuallyAudible = lastAiAudioChunkAtMs > 0L &&
                                             sinceLastAi < effectiveTailMs
 
-                    // Audio-клиент: с gate против echo
                     if (!aiActuallyAudible) {
                         liveClient.sendAudio(chunk)
+                        if (activeSession?.id == "translator") {
+                            translatorTextTranscriber.sendAudio(chunk)
+                        }
                         if (droppedMicChunks > 0) {
                             logger.d("Mic: gate opened, dropped $droppedMicChunks chunks during AI tail")
                             droppedMicChunks = 0
                         }
                     } else {
                         droppedMicChunks++
-                    }
-
-                    // Text-транскриптер: без gate — он не воспроизводит звук, echo не страшен.
-                    // Получает каждый PCM-чанк независимо от состояния audio-клиента.
-                    if (activeSession?.id == "translator") {
-                        translatorTextTranscriber.sendAudio(chunk)
                     }
                 }
             }
@@ -932,7 +718,6 @@ class LearnCoreViewModel @Inject constructor(
                 cachedSettings.sendAudioStreamEnd -> liveClient.sendAudioStreamEnd()
                 else -> liveClient.sendTurnComplete()
             }
-            // Также пробрасываем audioStreamEnd в text-транскриптер
             if (activeSession?.id == "translator") {
                 runCatching { translatorTextTranscriber.sendAudioStreamEnd() }
             }
@@ -974,10 +759,6 @@ class LearnCoreViewModel @Inject constructor(
         } catch (_: Exception) { }
     }
 
-    // ══════════════════════════════════════════════════════
-    //  GEMINI EVENTS
-    // ══════════════════════════════════════════════════════
-
     private fun observeGeminiEvents() {
         viewModelScope.launch {
             liveClient.events.collect { event ->
@@ -990,7 +771,6 @@ class LearnCoreViewModel @Inject constructor(
                     is GeminiEvent.AudioChunk -> {
                         val now = System.currentTimeMillis()
                         lastAiAudioChunkAtMs = now
-                        // v3.7: фиксируем активность для watchdog
                         lastModelActivityAtMs = now
                         hasModelOutputThisTurn = true
 
@@ -1005,9 +785,7 @@ class LearnCoreViewModel @Inject constructor(
                         _state.update { it.copy(isAiSpeaking = true, isPreparingSession = false) }
                         audioEngine.enqueuePlayback(event.pcmData)
 
-                        // Перезапускаем watchdog
                         startStuckTurnWatchdog()
-                        // Audio пришёл — text-without-audio watchdog не нужен
                         cancelTextWithoutAudioWatchdog()
                     }
 
@@ -1052,7 +830,7 @@ class LearnCoreViewModel @Inject constructor(
                                 ) {
                                     logger.d("Learn: silence detected (${quietFor}ms), prompting AI")
                                     lastSilencePromptAtMs = System.currentTimeMillis()
-                                    liveClient.sendText(
+                                    liveClient.sendRealtimeText(
                                         "[СИСТЕМА]: Ученик молчит. Коротко подбодри его по-русски, " +
                                             "дай подсказку или назови правильный ответ и попроси повторить."
                                     )
@@ -1067,9 +845,6 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.InputTranscript -> {
-                        // v3.8: для translator-сессии ASR пользователя не используем —
-                        // транскрипцию даст сама модель через function call submit_user_speech.
-                        // Это решает проблему иероглифов на коротких фразах укр/рос/нем.
                         if (activeSession?.id != "translator") {
                             transcriptChannel.trySend(TranscriptOp.UserDelta(event.text))
                         }
@@ -1080,13 +855,13 @@ class LearnCoreViewModel @Inject constructor(
                             awaitingInitialGreeting = false
                             greetingFallbackJob?.cancel()
                         }
-                        // v3.7: если text пришёл, а audio ещё нет — стартуем
-                        // text-without-audio watchdog
                         if (lastAiAudioChunkAtMs == 0L
                             || (System.currentTimeMillis() - lastAiAudioChunkAtMs) > 500) {
                             startTextWithoutAudioWatchdog()
                         }
-                        transcriptChannel.trySend(TranscriptOp.ModelDelta(event.text, "OutputTranscript"))
+                        if (activeSession?.id != "translator") {
+                            transcriptChannel.trySend(TranscriptOp.ModelDelta(event.text, "OutputTranscript"))
+                        }
                     }
 
                     is GeminiEvent.ModelText -> {
@@ -1098,11 +873,12 @@ class LearnCoreViewModel @Inject constructor(
                             || (System.currentTimeMillis() - lastAiAudioChunkAtMs) > 500) {
                             startTextWithoutAudioWatchdog()
                         }
-                        transcriptChannel.trySend(TranscriptOp.ModelDelta(event.text, "ModelText"))
+                        if (activeSession?.id != "translator") {
+                            transcriptChannel.trySend(TranscriptOp.ModelDelta(event.text, "ModelText"))
+                        }
                     }
 
                     is GeminiEvent.ToolCall -> {
-                        // ВАЖНО: Вызов функции — это тоже активность модели! Сбрасываем таймер зависания.
                         lastModelActivityAtMs = System.currentTimeMillis()
                         hasModelOutputThisTurn = true
                         startStuckTurnWatchdog()
@@ -1187,7 +963,7 @@ class LearnCoreViewModel @Inject constructor(
                 return@launch
             }
 
-            if (session.initialUserMessage.isBlank()) {
+            if (session.id == "translator" || session.initialUserMessage.isBlank()) {
                 logger.d("Learn: no initial greeting → enabling mic only")
                 if (!_state.value.isMicActive) startMic()
                 return@launch
@@ -1223,7 +999,7 @@ class LearnCoreViewModel @Inject constructor(
                     runCatching { sendSilenceWarmup() }
                     if (activeSession != session) return@launch
 
-                    liveClient.sendText(
+                    liveClient.sendRealtimeText(
                         "Ты меня слышишь? Поприветствуй ученика сейчас по-русски и " +
                             "задай первый вопрос."
                     )
@@ -1258,7 +1034,7 @@ class LearnCoreViewModel @Inject constructor(
             && liveClient.isReady) {
             val prompt = vocabularyEnforcer.buildCorrectionPrompt(violation)
             logger.d("Learn: sending buffered vocab correction (${violation.violatingWords})")
-            liveClient.sendText(prompt)
+            liveClient.sendRealtimeText(prompt)
         }
     }
 
@@ -1312,8 +1088,6 @@ class LearnCoreViewModel @Inject constructor(
                 runCatching { liveClient.sendToolResponse(responses.toList()) }
                     .onFailure { logger.e("Learn: failed to send ToolResponse: ${it.message}") }
 
-                // ВАЖНО: Мы ответили модели, сейчас она начнет генерировать голос.
-                // Даем ей свежие 3.5 секунды на старт аудио.
                 lastModelActivityAtMs = System.currentTimeMillis()
                 startStuckTurnWatchdog()
             }
@@ -1350,7 +1124,7 @@ class LearnCoreViewModel @Inject constructor(
                     waited += 120
                 }
             }
-            runCatching { liveClient.sendText(text) }
+            runCatching { liveClient.sendRealtimeText(text) }
                 .onFailure { logger.e("Learn.sendSystemText failed: ${it.message}") }
         }
     }
@@ -1367,7 +1141,7 @@ class LearnCoreViewModel @Inject constructor(
         statusBus.reset()
         safeStopForegroundService()
 
-        cleanupScope.launch {
+        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             runCatching { stopInternal() }
             runCatching { transcriptMutex.withLock { transcriptBuffer = emptyList() } }
             runCatching { audioEngine.releaseAll() }
@@ -1376,6 +1150,118 @@ class LearnCoreViewModel @Inject constructor(
             logger.d("LearnCoreViewModel cleanup complete")
         }
     }
-
 }
 
+5. SessionConfig.kt (Исправлен voiceId)
+
+package com.learnde.app.domain.model
+
+data class FunctionDeclarationConfig(
+    val name: String,
+    val description: String,
+    val parameters: Map<String, ParameterConfig> = emptyMap(),
+    val required: List<String> = emptyList()
+)
+
+data class ParameterConfig(
+    val type: String = "STRING",
+    val description: String = "",
+    val enumValues: List<String> = emptyList(),
+    val items: ParameterConfig? = null,
+    val properties: Map<String, ParameterConfig> = emptyMap(),
+    val required: List<String> = emptyList()
+)
+
+data class SessionConfig(
+    val model: String = DEFAULT_MODEL,
+    val responseModality: String = "AUDIO",
+    val temperature: Float = 1.0f,
+    val topP: Float = 0.95f,
+    val topK: Int = 0,
+    val maxOutputTokens: Int = 8192,
+    val presencePenalty: Float = 0.0f,
+    val frequencyPenalty: Float = 0.0f,
+    val voiceId: String = "Aoede",
+    val languageCode: String = "",
+    val latencyProfile: LatencyProfile = LatencyProfile.UltraLow,
+    val thinkingIncludeThoughts: Boolean = false,
+    val mediaResolution: String = "",
+    val autoActivityDetection: Boolean = true,
+    val vadStartSensitivity: String = "START_SENSITIVITY_LOW",
+    val vadEndSensitivity: String = "END_SENSITIVITY_LOW",
+    val vadPrefixPaddingMs: Int = 20,
+    val vadSilenceDurationMs: Int = 100,
+    val systemInstruction: String = DEFAULT_SYSTEM_INSTRUCTION,
+    val inputTranscription: Boolean = true,
+    val outputTranscription: Boolean = true,
+    val enableSessionResumption: Boolean = true,
+    val transparentResumption: Boolean = true,
+    val sessionHandle: String? = null,
+    val enableContextCompression: Boolean = true,
+    val compressionTriggerTokens: Long = 0L,
+    val compressionTargetTokens: Long = 0L,
+    val enableGoogleSearch: Boolean = false,
+    val functionDeclarations: List<FunctionDeclarationConfig> = emptyList(),
+    val sendAudioStreamEnd: Boolean = true,
+    val setupTimeoutMs: Long = 10_000L,
+    val diagnosticMinimalSetup: Boolean = false,
+    val sendThinkingConfig: Boolean = true,
+    val sendGenerationParams: Boolean = true,
+    val sendVadConfig: Boolean = true,
+    val sendTranscriptionConfig: Boolean = true,
+    val sendSessionResumptionConfig: Boolean = true,
+    val sendContextCompressionConfig: Boolean = true,
+    val logFullSetupJson: Boolean = true
+) {
+    companion object {
+        const val DEFAULT_MODEL = "gemini-3.1-flash-live-preview"
+        const val DEFAULT_SYSTEM_INSTRUCTION =
+            "Ты русскоязычный голосовой ассистент. " +
+            "Всегда отвечай только на русском языке. " +
+            "Слушай и понимай русскую речь. " +
+            "Отвечай кратко и по делу, не более 2-3 предложений, " +
+            "если пользователь не просит подробного ответа."
+        const val INPUT_SAMPLE_RATE = 16_000
+        const val OUTPUT_SAMPLE_RATE = 24_000
+        const val WS_HOST = "generativelanguage.googleapis.com"
+        const val WS_PATH = "ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+
+        fun baselineProfile() = SessionConfig(
+            diagnosticMinimalSetup = true,
+            enableSessionResumption = false,
+            enableContextCompression = false,
+            inputTranscription = false,
+            outputTranscription = false,
+            logFullSetupJson = true
+        )
+        fun withoutThinkingProfile() = SessionConfig(
+            sendThinkingConfig = false,
+            logFullSetupJson = true
+        )
+        fun withoutVadProfile() = SessionConfig(
+            sendVadConfig = false,
+            logFullSetupJson = true
+        )
+        fun withoutSessionMgmtProfile() = SessionConfig(
+            sendSessionResumptionConfig = false,
+            sendContextCompressionConfig = false,
+            enableSessionResumption = false,
+            enableContextCompression = false,
+            logFullSetupJson = true
+        )
+        fun withoutTranscriptionProfile() = SessionConfig(
+            sendTranscriptionConfig = false,
+            inputTranscription = false,
+            outputTranscription = false,
+            logFullSetupJson = true
+        )
+    }
+}
+
+enum class LatencyProfile(val thinkingLevel: String?, val displayName: String) {
+    Off      (null,      "Off — мгновенный ответ"),
+    UltraLow ("minimal", "Ultra Low — minimal thinking"),
+    Low      ("low",     "Low — light thinking"),
+    Balanced ("medium",  "Balanced — medium thinking"),
+    Reasoning("high",    "Reasoning — deep thinking")
+}
