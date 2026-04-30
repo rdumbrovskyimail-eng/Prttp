@@ -569,7 +569,8 @@ class LearnCoreViewModel @Inject constructor(
         }
 
         val (silenceMs, prefixMs, temp) = when (session.id) {
-            "translator"   -> Triple(600, 200, 0.15f)
+            // v3.9: агрессивный VAD для translator — быстрее закрываем turn
+            "translator"   -> Triple(400, 100, 0.1f)
             "a1_situation" -> Triple(1000, 300, cachedSettings.temperature)
             "a1_review"    -> Triple(1000, 300, cachedSettings.temperature)
             else           -> Triple(1000, 300, cachedSettings.temperature)
@@ -593,10 +594,12 @@ class LearnCoreViewModel @Inject constructor(
             languageCode = finalLanguageCode,
             latencyProfile = profile,
             autoActivityDetection = cachedSettings.enableServerVad,
-            vadStartSensitivity = if (cachedSettings.vadStartOfSpeechSensitivity > 0.5f)
-                "START_SENSITIVITY_HIGH" else "START_SENSITIVITY_LOW",
-            vadEndSensitivity = if (cachedSettings.vadEndOfSpeechSensitivity > 0.5f)
-                "END_SENSITIVITY_HIGH" else "END_SENSITIVITY_LOW",
+            vadStartSensitivity = if (session.id == "translator") "START_SENSITIVITY_HIGH"
+                else if (cachedSettings.vadStartOfSpeechSensitivity > 0.5f) "START_SENSITIVITY_HIGH"
+                else "START_SENSITIVITY_LOW",
+            vadEndSensitivity = if (session.id == "translator") "END_SENSITIVITY_HIGH"
+                else if (cachedSettings.vadEndOfSpeechSensitivity > 0.5f) "END_SENSITIVITY_HIGH"
+                else "END_SENSITIVITY_LOW",
             vadSilenceDurationMs = finalSilenceMs,
             vadPrefixPaddingMs = prefixMs,
             systemInstruction = finalSystemInstruction,
