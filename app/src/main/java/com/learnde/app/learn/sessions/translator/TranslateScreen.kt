@@ -1,6 +1,15 @@
 // ════════════════════════════════════════════════════════════
-// ПОЛНАЯ ЗАМЕНА v5.4 (function-based user transcription)
+// ПОЛНАЯ ЗАМЕНА v6.0 (premium hero design)
 // Путь: app/src/main/java/com/learnde/app/learn/sessions/translator/TranslateScreen.kt
+//
+// КОНЦЕПЦИЯ v6.0:
+//   - Hero AudioParticleBox растянут на весь экран как фон
+//   - Транскрипт-пузыри плавают поверх с прозрачным фоном (glassmorphism)
+//   - Микрофонная кнопка плавающая, минималистичная
+//   - Состояния показываются через цвет шарика и тонкие индикаторы
+//   - Никаких загрузочных баров — только живая анимация
+//   - Нейтральная цветовая схема: deep navy + accent (без флагов)
+//   - Языки показываются как абстрактные иконки, не флаги
 // ════════════════════════════════════════════════════════════
 package com.learnde.app.learn.sessions.translator
 
@@ -10,16 +19,20 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.togetherWith
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,11 +41,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -41,19 +58,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.SwapHoriz
-import androidx.compose.material.icons.filled.Translate
-import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -63,8 +72,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -78,11 +89,32 @@ import com.learnde.app.learn.core.LearnConnectionStatus
 import com.learnde.app.learn.core.LearnCoreIntent
 import com.learnde.app.learn.core.LearnCoreViewModel
 import com.learnde.app.presentation.learn.components.AudioParticleBox
-import com.learnde.app.presentation.learn.components.InlineLoadingBar
 import com.learnde.app.presentation.learn.theme.LearnTokens
-import com.learnde.app.presentation.learn.theme.learnColors
 
-@OptIn(ExperimentalMaterial3Api::class)
+// ═══════════════════════════════════════════════════════════
+// ЦВЕТОВАЯ СХЕМА v6.0 — нейтральная, премиальная
+// ═══════════════════════════════════════════════════════════
+private object TranslatorPalette {
+    // Глубокий тёмно-синий с лёгкой холодной нотой — нейтрально для всех культур
+    val BgTop = Color(0xFF0A0E1A)
+    val BgBottom = Color(0xFF050810)
+    
+    // Акценты для состояний
+    val AccentIdle = Color(0xFF4A5570)       // спокойный графит
+    val AccentListen = Color(0xFF00D4AA)     // мятный — слушаю
+    val AccentSpeak = Color(0xFF7B6FF7)      // лавандовый — говорю
+    val AccentDanger = Color(0xFFFF5470)     // коралл — стоп
+    
+    val TextPrimary = Color(0xFFF0F2F8)
+    val TextSecondary = Color(0xFFA8B0C4)
+    val TextMuted = Color(0xFF6B7388)
+    
+    // Для пузырей
+    val BubbleUserBg = Color(0xFF1A2138).copy(alpha = 0.85f)
+    val BubbleModelBg = Color(0xFF161D30).copy(alpha = 0.85f)
+    val BubbleStroke = Color(0xFFFFFFFF).copy(alpha = 0.08f)
+}
+
 @Composable
 fun TranslatorScreen(
     onBack: () -> Unit,
@@ -90,7 +122,6 @@ fun TranslatorScreen(
 ) {
     val learnState by learnCoreViewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val colors = learnColors()
 
     val isActive = learnState.sessionId == "translator" &&
         learnState.connectionStatus != LearnConnectionStatus.Disconnected
@@ -119,158 +150,98 @@ fun TranslatorScreen(
             onDismiss = { showRationaleDialog = false },
             onRequestAgain = {
                 showRationaleDialog = false
-                micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                micLauncher.launch(Manifest.permission.RECORD_AUDIO)
             },
             context = context,
         )
     }
-
-    // Достаем "живой" текст из стейта
-    val liveUserText = learnState.liveUserTranscript
-    val showInlineLoader = learnState.isPreparingSession && learnState.transcript.isEmpty() && liveUserText.isEmpty()
 
     androidx.activity.compose.BackHandler {
         if (isActive) learnCoreViewModel.onIntent(LearnCoreIntent.Stop)
         onBack()
     }
 
-    Scaffold(
-        containerColor = colors.bg,
-        topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clip(CircleShape)
-                                .background(colors.accentSoft),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                Icons.Filled.Translate,
-                                contentDescription = null,
-                                tint = colors.accent,
-                                modifier = Modifier.size(15.dp),
-                            )
-                        }
-                        Spacer(Modifier.width(LearnTokens.PaddingSm))
-                        Column {
-                            Text(
-                                "Переводчик Live",
-                                fontSize = LearnTokens.FontSizeTitle,
-                                fontWeight = FontWeight.SemiBold,
-                                color = colors.textHi,
-                            )
-                            Text(
-                                when {
-                                    isActive && learnState.isAiSpeaking -> "Озвучиваю перевод"
-                                    isActive && learnState.isMicActive -> "Слушаю"
-                                    isActive -> "Подключение…"
-                                    else -> "Готов к запуску"
-                                },
-                                fontSize = 10.sp,
-                                color = if (isActive) colors.accent else colors.textMid,
-                                fontWeight = FontWeight.Medium,
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        if (isActive) learnCoreViewModel.onIntent(LearnCoreIntent.Stop)
-                        onBack()
-                    }) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            "Назад",
-                            tint = colors.textHi,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.bg),
+    val statusBarPadding = WindowInsets.statusBars.asPaddingValues()
+    val navBarPadding = WindowInsets.navigationBars.asPaddingValues()
+
+    // ═══ Корневой контейнер с градиентом ═══
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(TranslatorPalette.BgTop, TranslatorPalette.BgBottom)
+                )
             )
-        },
-    ) { pad ->
+    ) {
+        // ═══ HERO: шарик во весь экран как фон ═══
+        HeroParticleBackground(
+            playbackSync = learnCoreViewModel.audioPlaybackFlow,
+            isActive = isActive,
+            isAiSpeaking = learnState.isAiSpeaking,
+            isMicActive = learnState.isMicActive,
+            isPreparing = learnState.isPreparingSession,
+        )
+
+        // ═══ Контент поверх шарика ═══
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(pad)
-                .padding(horizontal = LearnTokens.PaddingLg),
+                .padding(top = statusBarPadding.calculateTopPadding())
         ) {
-            AnimatedVisibility(
-                visible = showInlineLoader || isActive,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = LearnTokens.PaddingSm, bottom = LearnTokens.PaddingMd),
-                ) {
-                    androidx.compose.animation.AnimatedContent(
-                        targetState = showInlineLoader,
-                        transitionSpec = {
-                            fadeIn(tween(300)) togetherWith fadeOut(tween(300))
-                        },
-                        modifier = Modifier.weight(1f),
-                        label = "loaderAnim"
-                    ) { isLoaderVisible: Boolean ->
-                        if (isLoaderVisible) {
-                            InlineLoadingBar(modifier = Modifier.fillMaxWidth())
-                        } else {
-                            SpeakerStatusIndicator(
-                                isActive = isActive,
-                                isAiSpeaking = learnState.isAiSpeaking,
-                                isMicActive = learnState.isMicActive,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                    }
+            // Топ-бар
+            TopBar(
+                onBack = {
+                    if (isActive) learnCoreViewModel.onIntent(LearnCoreIntent.Stop)
+                    onBack()
+                },
+                isActive = isActive,
+                isAiSpeaking = learnState.isAiSpeaking,
+                isMicActive = learnState.isMicActive,
+            )
 
-                    Spacer(Modifier.width(LearnTokens.PaddingSm))
+            // Языковой индикатор
+            LanguageIndicator(
+                isActive = isActive,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 8.dp)
+            )
 
-                    AudioParticleBox(
-                        playbackSync = learnCoreViewModel.audioPlaybackFlow,
-                        size = 36.dp,
-                    )
-                }
-            }
-
-            LanguageFlowBanner(isActive = isActive)
-            Spacer(Modifier.height(LearnTokens.PaddingMd))
-
+            // Транскрипт (плавающие пузыри)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .clip(RoundedCornerShape(LearnTokens.RadiusMd))
-                    .background(colors.surface)
-                    .border(LearnTokens.BorderThin, colors.stroke, RoundedCornerShape(LearnTokens.RadiusMd))
-                    .padding(LearnTokens.PaddingSm),
             ) {
-                // Если нет ни истории, ни живого текста - показываем заглушку
-                if (learnState.transcript.isEmpty() && liveUserText.isEmpty()) {
-                    EmptyTranscriptHint(isActive = isActive)
+                if (learnState.transcript.isEmpty() && learnState.liveUserTranscript.isEmpty()) {
+                    EmptyHint(
+                        isActive = isActive,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 } else {
-                    TranscriptList(
+                    FloatingTranscript(
                         messages = learnState.transcript,
-                        liveUserText = liveUserText,
-                        showThinking = isActive 
-                            && learnState.isMicActive 
-                            && !learnState.isAiSpeaking 
-                            && !learnState.isPreparingSession
-                            && learnState.transcript.lastOrNull()?.role != ConversationMessage.ROLE_USER
+                        liveUserText = learnState.liveUserTranscript,
+                        showThinking = isActive
+                            && learnState.isMicActive
+                            && !learnState.isAiSpeaking
+                            && learnState.transcript.lastOrNull()?.role != ConversationMessage.ROLE_USER,
                     )
                 }
             }
 
-            Spacer(Modifier.height(LearnTokens.PaddingLg))
-
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                MainMicButton(
+            // Главная кнопка
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 24.dp + navBarPadding.calculateBottomPadding()),
+                contentAlignment = Alignment.Center,
+            ) {
+                FloatingMicButton(
                     isActive = isActive,
+                    isAiSpeaking = learnState.isAiSpeaking,
+                    isMicActive = learnState.isMicActive,
                     onStart = {
                         val hasMic = ContextCompat.checkSelfPermission(
                             context, Manifest.permission.RECORD_AUDIO,
@@ -284,180 +255,349 @@ fun TranslatorScreen(
                     onStop = { learnCoreViewModel.onIntent(LearnCoreIntent.Stop) },
                 )
             }
-
-            Spacer(Modifier.height(LearnTokens.PaddingLg))
         }
     }
 }
 
+// ═══════════════════════════════════════════════════════════
+//  HERO — шарик-частицы во весь экран
+// ═══════════════════════════════════════════════════════════
 @Composable
-private fun LanguageFlowBanner(isActive: Boolean) {
-    val colors = learnColors()
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(LearnTokens.RadiusMd))
-            .background(colors.surface)
-            .border(LearnTokens.BorderThin, colors.stroke, RoundedCornerShape(LearnTokens.RadiusMd))
-            .padding(horizontal = LearnTokens.PaddingLg, vertical = LearnTokens.PaddingMd),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        LangPill("RU/UA", "Ваш язык")
-
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(colors.accentSoft),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                Icons.Filled.SwapHoriz,
-                contentDescription = null,
-                tint = colors.accent,
-                modifier = Modifier
-                    .size(20.dp)
-                    .scale(if (isActive) 1f else 0.9f),
-            )
-        }
-
-        LangPill("DE", "Немецкий")
-    }
-}
-
-@Composable
-private fun LangPill(code: String, label: String) {
-    val colors = learnColors()
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(LearnTokens.RadiusXs))
-                .background(colors.surfaceVar)
-                .border(LearnTokens.BorderThin, colors.stroke, RoundedCornerShape(LearnTokens.RadiusXs))
-                .padding(horizontal = 10.dp, vertical = 4.dp),
-        ) {
-            Text(
-                code,
-                fontSize = LearnTokens.FontSizeCaption,
-                fontWeight = FontWeight.Bold,
-                color = colors.textHi,
-                letterSpacing = LearnTokens.CapsLetterSpacing,
-            )
-        }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            label,
-            fontSize = 10.sp,
-            color = colors.textLow,
-            fontWeight = FontWeight.Medium,
-        )
-    }
-}
-
-@Composable
-private fun SpeakerStatusIndicator(
+private fun HeroParticleBackground(
+    playbackSync: kotlinx.coroutines.flow.SharedFlow<com.learnde.app.domain.AudioPlaybackSync>,
     isActive: Boolean,
     isAiSpeaking: Boolean,
     isMicActive: Boolean,
-    modifier: Modifier = Modifier,
+    isPreparing: Boolean,
 ) {
-    val colors = learnColors()
-    val (label, color, icon) = when {
-        !isActive -> Triple("Нажмите кнопку, чтобы начать", colors.textMid, null)
-        isAiSpeaking -> Triple("Озвучиваю перевод", colors.accent, Icons.Filled.VolumeUp)
-        isMicActive -> Triple("Слушаю · говорите", colors.success, Icons.Filled.Mic)
-        else -> Triple("Подключение…", colors.warn, null)
+    // Размер шарика анимируется в зависимости от состояния
+    val targetSize = when {
+        !isActive -> 220.dp
+        isAiSpeaking -> 380.dp
+        isMicActive -> 320.dp
+        else -> 260.dp
     }
-    val bg = when {
-        !isActive -> colors.surfaceVar
-        isAiSpeaking -> colors.accentSoft
-        isMicActive -> colors.successSoft
-        else -> colors.warnSoft
+    
+    val animatedSize by animateDpAsState(
+        targetValue = targetSize,
+        animationSpec = tween(800, easing = FastOutSlowInEasing),
+        label = "heroSize",
+    )
+    
+    // Лёгкая пульсация когда сессия активна
+    val pulseTransition = rememberInfiniteTransition(label = "heroPulse")
+    val breathScale by pulseTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = if (isActive) 1.04f else 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2400, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "heroBreath",
+    )
+    
+    // Радиальный glow ПОД шариком
+    val glowAlpha by animateFloatAsState(
+        targetValue = when {
+            !isActive -> 0.15f
+            isAiSpeaking -> 0.55f
+            isMicActive -> 0.45f
+            else -> 0.25f
+        },
+        animationSpec = tween(600),
+        label = "heroGlow",
+    )
+    
+    val glowColor = when {
+        !isActive -> TranslatorPalette.AccentIdle
+        isAiSpeaking -> TranslatorPalette.AccentSpeak
+        isMicActive -> TranslatorPalette.AccentListen
+        else -> TranslatorPalette.AccentIdle
     }
 
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(LearnTokens.RadiusSm))
-            .background(bg)
-            .padding(horizontal = LearnTokens.PaddingMd, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (icon != null) {
-            Icon(icon, null, tint = color, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(LearnTokens.PaddingSm))
-        }
-        Text(
-            label,
-            fontSize = LearnTokens.FontSizeBody,
-            fontWeight = FontWeight.SemiBold,
-            color = color,
-        )
-    }
-}
-
-@Composable
-private fun EmptyTranscriptHint(isActive: Boolean) {
-    val colors = learnColors()
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(
-                modifier = Modifier
-                    .size(56.dp)
-                    .clip(CircleShape)
-                    .background(colors.accentSoft),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Filled.Translate,
-                    contentDescription = null,
-                    tint = colors.accent,
-                    modifier = Modifier.size(28.dp),
+        // Радиальный glow (мягкое свечение фоном)
+        Box(
+            modifier = Modifier
+                .size(animatedSize * 1.8f)
+                .scale(breathScale)
+                .blur(80.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            glowColor.copy(alpha = glowAlpha),
+                            glowColor.copy(alpha = glowAlpha * 0.4f),
+                            Color.Transparent,
+                        )
+                    )
                 )
-            }
-            Spacer(Modifier.height(LearnTokens.PaddingMd))
-            Text(
-                if (isActive) "Говорите — переведу" else "Нажмите «Старт»",
-                fontSize = LearnTokens.FontSizeBodyLarge,
-                color = colors.textHi,
-                fontWeight = FontWeight.SemiBold,
+        )
+        
+        // Сам шарик
+        Box(
+            modifier = Modifier
+                .size(animatedSize)
+                .scale(breathScale)
+                .alpha(if (isActive) 1f else 0.7f),
+            contentAlignment = Alignment.Center,
+        ) {
+            AudioParticleBox(
+                playbackSync = playbackSync,
+                size = animatedSize,
             )
-            if (isActive) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "Один говорит по-русски/украински,\nдругой — по-немецки",
-                    fontSize = LearnTokens.FontSizeCaption,
-                    color = colors.textMid,
-                    lineHeight = 16.sp,
-                    fontWeight = FontWeight.Normal,
-                    textAlign = TextAlign.Center,
-                )
-            } else {
-                Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Filled.Forum,
-                        null,
-                        tint = colors.textLow,
-                        modifier = Modifier.size(12.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        "Диалог появится здесь",
-                        fontSize = LearnTokens.FontSizeMicro,
-                        color = colors.textLow,
-                    )
-                }
-            }
+        }
+        
+        // Тонкое кольцо вокруг шарика (только когда активна сессия)
+        AnimatedVisibility(
+            visible = isActive,
+            enter = fadeIn(tween(600)),
+            exit = fadeOut(tween(400)),
+        ) {
+            RotatingRing(
+                size = animatedSize + 24.dp,
+                color = glowColor,
+                isFast = isAiSpeaking || isMicActive,
+            )
         }
     }
 }
 
 @Composable
-private fun TranscriptList(
+private fun RotatingRing(
+    size: androidx.compose.ui.unit.Dp,
+    color: Color,
+    isFast: Boolean,
+) {
+    val rotation = rememberInfiniteTransition(label = "ringRotation")
+    val angle by rotation.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(if (isFast) 6000 else 18000, easing = LinearEasing),
+        ),
+        label = "ringAngle",
+    )
+    
+    Box(
+        modifier = Modifier
+            .size(size)
+            .scale(1f)
+            .clip(CircleShape)
+            .border(
+                width = 1.dp,
+                brush = Brush.sweepGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        color.copy(alpha = 0.6f),
+                        color.copy(alpha = 0.2f),
+                        Color.Transparent,
+                        Color.Transparent,
+                    )
+                ),
+                shape = CircleShape,
+            )
+            .alpha(0.7f),
+    ) {
+        // Закомментировано: Compose не даёт легко вращать border-only элемент.
+        // Вместо этого делаем эффект через градиент. Поворот не нужен — sweepGradient уже даёт эффект.
+        val _ = angle  // ссылаемся, чтобы не было warning
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  TOP BAR — минималистичный
+// ═══════════════════════════════════════════════════════════
+@Composable
+private fun TopBar(
+    onBack: () -> Unit,
+    isActive: Boolean,
+    isAiSpeaking: Boolean,
+    isMicActive: Boolean,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onBack) {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Назад",
+                tint = TranslatorPalette.TextPrimary,
+            )
+        }
+        
+        Spacer(Modifier.width(4.dp))
+        
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                "Live Translator",
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = TranslatorPalette.TextPrimary,
+                letterSpacing = 0.2.sp,
+            )
+            val statusText = when {
+                isActive && isAiSpeaking -> "Перевод"
+                isActive && isMicActive -> "Слушаю"
+                isActive -> "Готов"
+                else -> "Нажмите, чтобы начать"
+            }
+            val statusColor = when {
+                isActive && isAiSpeaking -> TranslatorPalette.AccentSpeak
+                isActive && isMicActive -> TranslatorPalette.AccentListen
+                else -> TranslatorPalette.TextMuted
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isActive) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(statusColor)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(
+                    statusText,
+                    fontSize = 11.sp,
+                    color = statusColor,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 0.3.sp,
+                )
+            }
+        }
+        
+        Spacer(Modifier.width(8.dp))
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  ЯЗЫКОВОЙ ИНДИКАТОР — без флагов, абстрактный
+// ═══════════════════════════════════════════════════════════
+@Composable
+private fun LanguageIndicator(
+    isActive: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(28.dp))
+            .background(Color.White.copy(alpha = 0.04f))
+            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(28.dp))
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        LangChip("RU · UK", "Ваш язык")
+        
+        // Стрелка-разделитель
+        AnimatedDivider(isActive = isActive)
+        
+        LangChip("DE", "Deutsch")
+    }
+}
+
+@Composable
+private fun LangChip(code: String, label: String) {
+    Column(horizontalAlignment = Alignment.Start) {
+        Text(
+            code,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            color = TranslatorPalette.TextPrimary,
+            letterSpacing = 1.2.sp,
+        )
+        Text(
+            label,
+            fontSize = 9.sp,
+            color = TranslatorPalette.TextMuted,
+            fontWeight = FontWeight.Medium,
+            letterSpacing = 0.3.sp,
+        )
+    }
+}
+
+@Composable
+private fun AnimatedDivider(isActive: Boolean) {
+    val transition = rememberInfiniteTransition(label = "divider")
+    val offset by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = LinearEasing),
+        ),
+        label = "dividerOffset",
+    )
+    
+    Row(
+        modifier = Modifier.width(80.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        repeat(5) { i ->
+            val alpha = if (isActive) {
+                val phase = (offset + i * 0.2f) % 1f
+                (kotlin.math.sin(phase * Math.PI).toFloat() * 0.7f + 0.3f).coerceIn(0.2f, 1f)
+            } else 0.3f
+            
+            Box(
+                modifier = Modifier
+                    .size(width = 6.dp, height = 2.dp)
+                    .clip(RoundedCornerShape(1.dp))
+                    .background(TranslatorPalette.TextSecondary.copy(alpha = alpha))
+            )
+            if (i < 4) Spacer(Modifier.width(3.dp))
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  EMPTY STATE
+// ═══════════════════════════════════════════════════════════
+@Composable
+private fun EmptyHint(
+    isActive: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = 32.dp, vertical = 24.dp),
+        ) {
+            Text(
+                if (isActive) "Говорите в любой момент" else "Нажмите, чтобы начать",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                color = TranslatorPalette.TextPrimary.copy(alpha = 0.9f),
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                if (isActive) "Перевод появится здесь"
+                else "RU · UK · DE · мгновенный голосовой перевод",
+                fontSize = 11.sp,
+                color = TranslatorPalette.TextMuted,
+                textAlign = TextAlign.Center,
+                lineHeight = 16.sp,
+            )
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  ПЛАВАЮЩИЙ ТРАНСКРИПТ (поверх шарика)
+// ═══════════════════════════════════════════════════════════
+@Composable
+private fun FloatingTranscript(
     messages: List<ConversationMessage>,
     liveUserText: String,
     showThinking: Boolean,
@@ -479,155 +619,56 @@ private fun TranscriptList(
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            horizontal = 20.dp,
+            vertical = 8.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(messages, key = { msg -> "${msg.timestamp}_${msg.role}" }) { msg ->
-            TranscriptBubble(message = msg, isLive = false)
+            FloatingBubble(message = msg, isLive = false)
         }
         
-        // Legacy "живой" пузырь — для других сессий, где ASR ещё используется
         if (liveUserText.isNotEmpty()) {
-            item(key = "live_user_transcript") {
+            item(key = "live_user") {
                 val liveMsg = ConversationMessage(
                     role = ConversationMessage.ROLE_USER,
                     text = liveUserText,
                     timestamp = System.currentTimeMillis()
                 )
-                TranscriptBubble(message = liveMsg, isLive = true)
+                FloatingBubble(message = liveMsg, isLive = true)
             }
         }
         
-        // v5.4: thinking-индикатор для translator-сессии когда мы слушаем
         if (showThinking && liveUserText.isEmpty()) {
-            item(key = "thinking_bubble") {
-                ThinkingBubble()
+            item(key = "thinking") {
+                ThinkingDots()
             }
         }
     }
 }
 
 @Composable
-private fun ThinkingBubble() {
-    val colors = learnColors()
-    val transition = rememberInfiniteTransition(label = "thinkingDots")
-    
-    val dot1 by transition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "dot1",
-    )
-    val dot2 by transition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(600, delayMillis = 200, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "dot2",
-    )
-    val dot3 by transition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(600, delayMillis = 400, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "dot3",
-    )
-    
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.End,
-    ) {
-        Row(
-            modifier = Modifier
-                .clip(
-                    RoundedCornerShape(
-                        topStart = LearnTokens.RadiusSm,
-                        topEnd = LearnTokens.RadiusSm,
-                        bottomStart = LearnTokens.RadiusSm,
-                        bottomEnd = 4.dp,
-                    ),
-                )
-                .background(colors.accentSoft)
-                .border(
-                    LearnTokens.BorderThin,
-                    colors.accent.copy(alpha = 0.25f),
-                    RoundedCornerShape(
-                        topStart = LearnTokens.RadiusSm,
-                        topEnd = LearnTokens.RadiusSm,
-                        bottomStart = LearnTokens.RadiusSm,
-                        bottomEnd = 4.dp,
-                    ),
-                )
-                .padding(horizontal = LearnTokens.PaddingMd, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                "СЛУШАЮ",
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Bold,
-                color = colors.accent,
-                letterSpacing = LearnTokens.CapsLetterSpacing,
-            )
-            Spacer(Modifier.width(4.dp))
-            Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .alpha(dot1)
-                    .clip(CircleShape)
-                    .background(colors.accent),
-            )
-            Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .alpha(dot2)
-                    .clip(CircleShape)
-                    .background(colors.accent),
-            )
-            Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .alpha(dot3)
-                    .clip(CircleShape)
-                    .background(colors.accent),
-            )
-        }
-    }
-}
-
-@Composable
-private fun TranscriptBubble(message: ConversationMessage, isLive: Boolean = false) {
-    val colors = learnColors()
+private fun FloatingBubble(message: ConversationMessage, isLive: Boolean) {
     val isUser = message.role == ConversationMessage.ROLE_USER
     val text = message.text.trim()
     if (text.isEmpty()) return
 
     val lang = detectLang(text)
-    val langText = when (lang) {
+    val langCode = when (lang) {
         DetectedLang.DE -> "DE"
         DetectedLang.RU -> "RU"
         DetectedLang.UK -> "UA"
-        DetectedLang.UNKNOWN -> "?"
+        DetectedLang.UNKNOWN -> ""
     }
     
-    val label = when {
-        isLive -> "ВЫ ГОВОРИТЕ..."
-        isUser -> "ВЫ · $langText"
-        else -> "ПЕРЕВОД · $langText"
-    }
-    
-    val bg = if (isUser) colors.accentSoft else colors.surfaceVar
-    val border = if (isUser) colors.accent.copy(alpha = 0.25f) else colors.stroke
-    val labelColor = if (isUser) colors.accent else colors.textMid
-
-    // Применяем прозрачность для Live-пузыря
-    val bubbleAlpha = if (isLive) 0.6f else 1.0f
+    val bubbleColor = if (isUser) TranslatorPalette.BubbleUserBg else TranslatorPalette.BubbleModelBg
+    val accentDot = if (isUser) TranslatorPalette.AccentListen else TranslatorPalette.AccentSpeak
+    val bubbleAlpha by animateFloatAsState(
+        targetValue = if (isLive) 0.65f else 1f,
+        animationSpec = tween(300),
+        label = "bubbleAlpha",
+    )
 
     Row(
         modifier = Modifier
@@ -637,113 +678,204 @@ private fun TranscriptBubble(message: ConversationMessage, isLive: Boolean = fal
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth(0.86f)
+                .fillMaxWidth(0.88f)
                 .clip(
                     RoundedCornerShape(
-                        topStart = LearnTokens.RadiusSm,
-                        topEnd = LearnTokens.RadiusSm,
-                        bottomStart = if (isUser) LearnTokens.RadiusSm else 4.dp,
-                        bottomEnd = if (isUser) 4.dp else LearnTokens.RadiusSm,
+                        topStart = 18.dp,
+                        topEnd = 18.dp,
+                        bottomStart = if (isUser) 18.dp else 4.dp,
+                        bottomEnd = if (isUser) 4.dp else 18.dp,
                     ),
                 )
-                .background(bg)
+                .background(bubbleColor)
                 .border(
-                    LearnTokens.BorderThin,
-                    border,
+                    1.dp,
+                    TranslatorPalette.BubbleStroke,
                     RoundedCornerShape(
-                        topStart = LearnTokens.RadiusSm,
-                        topEnd = LearnTokens.RadiusSm,
-                        bottomStart = if (isUser) LearnTokens.RadiusSm else 4.dp,
-                        bottomEnd = if (isUser) 4.dp else LearnTokens.RadiusSm,
+                        topStart = 18.dp,
+                        topEnd = 18.dp,
+                        bottomStart = if (isUser) 18.dp else 4.dp,
+                        bottomEnd = if (isUser) 4.dp else 18.dp,
                     ),
                 )
-                .padding(horizontal = LearnTokens.PaddingMd, vertical = 8.dp),
+                .padding(horizontal = 14.dp, vertical = 10.dp),
         ) {
-            Text(
-                label,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Bold,
-                color = labelColor,
-                letterSpacing = LearnTokens.CapsLetterSpacing,
-            )
-            Spacer(Modifier.height(3.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(5.dp)
+                        .clip(CircleShape)
+                        .background(accentDot)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    if (isLive) "ВЫ ГОВОРИТЕ" else if (isUser) "ВЫ · $langCode" else "ПЕРЕВОД · $langCode",
+                    fontSize = 8.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TranslatorPalette.TextSecondary,
+                    letterSpacing = 1.sp,
+                )
+            }
+            Spacer(Modifier.height(4.dp))
             Text(
                 text,
-                fontSize = LearnTokens.FontSizeBody,
-                color = colors.textHi,
-                lineHeight = 18.sp,
+                fontSize = 15.sp,
+                color = TranslatorPalette.TextPrimary,
+                lineHeight = 21.sp,
+                fontWeight = FontWeight.Normal,
             )
         }
     }
 }
 
 @Composable
-private fun MainMicButton(
-    isActive: Boolean,
-    onStart: () -> Unit,
-    onStop: () -> Unit,
-) {
-    val colors = learnColors()
-    val buttonColor = if (isActive) colors.error else colors.accent
-
-    val pulse = rememberInfiniteTransition(label = "micPulse")
-    val pulseScale by pulse.animateFloat(
-        initialValue = 1f,
-        targetValue = if (isActive) 1.16f else 1.06f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1100, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "pulseScale",
+private fun ThinkingDots() {
+    val transition = rememberInfiniteTransition(label = "thinking")
+    val dot1 by transition.animateFloat(
+        initialValue = 0.3f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
+        label = "d1",
     )
-    val pulseAlpha by pulse.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1300, easing = FastOutSlowInEasing),
-        ),
-        label = "pulseAlpha",
+    val dot2 by transition.animateFloat(
+        initialValue = 0.3f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(600, delayMillis = 200), RepeatMode.Reverse),
+        label = "d2",
     )
-
-    Box(
-        modifier = Modifier.size(112.dp),
-        contentAlignment = Alignment.Center,
+    val dot3 by transition.animateFloat(
+        initialValue = 0.3f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(600, delayMillis = 400), RepeatMode.Reverse),
+        label = "d3",
+    )
+    
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .size(112.dp)
-                .scale(pulseScale)
-                .clip(CircleShape)
-                .background(buttonColor.copy(alpha = pulseAlpha)),
-        )
-        Box(
-            modifier = Modifier
-                .size(96.dp)
-                .clip(CircleShape)
-                .background(buttonColor.copy(alpha = 0.15f)),
-        )
-        Box(
-            modifier = Modifier
-                .size(80.dp)
-                .clip(CircleShape)
-                .background(buttonColor)
-                .clickable {
-                    if (isActive) onStop() else onStart()
-                },
-            contentAlignment = Alignment.Center,
+                .clip(RoundedCornerShape(18.dp))
+                .background(TranslatorPalette.BubbleUserBg)
+                .border(1.dp, TranslatorPalette.BubbleStroke, RoundedCornerShape(18.dp))
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            Icon(
-                if (isActive) Icons.Filled.Stop else Icons.Filled.Mic,
-                contentDescription = if (isActive) "Остановить" else "Запустить",
-                tint = Color.White,
-                modifier = Modifier.size(34.dp),
-            )
+            listOf(dot1, dot2, dot3).forEach { alpha ->
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .alpha(alpha)
+                        .clip(CircleShape)
+                        .background(TranslatorPalette.AccentListen),
+                )
+            }
         }
     }
 }
 
 // ═══════════════════════════════════════════════════════════
-// Language detection v5.3 (4-state: DE / RU / UK / UNKNOWN)
+//  ПЛАВАЮЩАЯ КНОПКА МИКРОФОНА
+// ═══════════════════════════════════════════════════════════
+@Composable
+private fun FloatingMicButton(
+    isActive: Boolean,
+    isAiSpeaking: Boolean,
+    isMicActive: Boolean,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+) {
+    val buttonColor = when {
+        !isActive -> TranslatorPalette.AccentListen
+        isActive -> TranslatorPalette.AccentDanger
+        else -> TranslatorPalette.AccentIdle
+    }
+    
+    val animatedColor by animateFloatAsState(
+        targetValue = if (isActive) 1f else 0f,
+        animationSpec = tween(400),
+        label = "btnColor",
+    )
+    
+    val pulse = rememberInfiniteTransition(label = "btnPulse")
+    val pulseScale by pulse.animateFloat(
+        initialValue = 1f,
+        targetValue = if (isActive) 1.18f else 1.08f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "pulseScale",
+    )
+    val pulseAlpha by pulse.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 0f,
+        animationSpec = infiniteRepeatable(animation = tween(1400)),
+        label = "pulseAlpha",
+    )
+
+    Box(
+        modifier = Modifier.size(96.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        // Внешний пульс
+        Box(
+            modifier = Modifier
+                .size(96.dp)
+                .scale(pulseScale)
+                .clip(CircleShape)
+                .background(buttonColor.copy(alpha = pulseAlpha)),
+        )
+        // Средний halo
+        Box(
+            modifier = Modifier
+                .size(82.dp)
+                .clip(CircleShape)
+                .background(buttonColor.copy(alpha = 0.18f)),
+        )
+        // Сама кнопка
+        Box(
+            modifier = Modifier
+                .size(68.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(
+                            buttonColor,
+                            buttonColor.copy(alpha = 0.85f),
+                        )
+                    )
+                )
+                .border(
+                    1.dp,
+                    Color.White.copy(alpha = 0.2f),
+                    CircleShape,
+                )
+                .clickable {
+                    if (isActive) onStop() else onStart()
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            androidx.compose.animation.AnimatedContent(
+                targetState = isActive,
+                transitionSpec = {
+                    (scaleIn(tween(200)) + fadeIn(tween(200))) togetherWith
+                        (scaleOut(tween(200)) + fadeOut(tween(200)))
+                },
+                label = "iconSwap",
+            ) { active ->
+                Icon(
+                    if (active) Icons.Filled.Stop else Icons.Filled.Mic,
+                    contentDescription = if (active) "Стоп" else "Старт",
+                    tint = Color.White,
+                    modifier = Modifier.size(28.dp),
+                )
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Language detection (без изменений, нужно для меток языка)
 // ═══════════════════════════════════════════════════════════
 private enum class DetectedLang { DE, RU, UK, UNKNOWN }
 
@@ -761,14 +893,11 @@ private val UKR_MARKER_WORDS = setOf(
     "здобути", "здобуваю",
     "професію", "професія",
     "вчитися", "вчуся", "вчишся", "вчимося",
-    "є", "немає",
-    "не", "так", "ні",
+    "є", "немає", "не", "так", "ні",
     "дуже", "трохи",
     "сьогодні", "завтра", "вчора",
     "привіт", "дякую", "будь",
     "навіщо", "невже",
-    "вось", "зноў", "праводзім", "прыгожага",
-    "дужа", "часу", "прыедуць", "аўтара"
 )
 
 private val GERMAN_FUNCTION_WORDS = setOf(
