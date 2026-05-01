@@ -1,3 +1,4 @@
+// Путь: app/src/main/java/com/learnde/app/learn/sessions/translator/TranslatorSession.kt
 package com.learnde.app.learn.sessions.translator
 
 import com.learnde.app.domain.model.FunctionCall
