@@ -41,9 +41,18 @@ class TranslatorTextTranscriber @Inject constructor(
     @Volatile private var isActive: Boolean = false
 
     private val turnBuffer = StringBuilder()
-    private val pcmBuffer = mutableListOf<ByteArray>()
+    private val pcmBufferMutex = kotlinx.coroutines.sync.Mutex()
+    private val pcmBuffer = java.util.ArrayDeque<ByteArray>()
+    @Volatile private var pcmBufferBytes: Int = 0
+    @Volatile private var bufferFlushed: Boolean = false
 
     val isReady: Boolean get() = client.isReady
+
+    companion object {
+        private val ORIGINAL_REGEX = Regex("ORIGINAL:(.*?)(?:\\nTRANSLATION:|$)", RegexOption.DOT_MATCHES_ALL)
+        private val TRANSLATION_REGEX = Regex("TRANSLATION:(.*)", RegexOption.DOT_MATCHES_ALL)
+        private const val MAX_PCM_BUFFER_BYTES = 320_000
+    }
 
     private val systemInstruction = """
 You are a real-time text translator. For every user utterance you produce TWO things: the original transcript AND the translation, following STRICT direction rules identical to the audio translator.
@@ -83,9 +92,9 @@ ABSOLUTE RULES:
             logger.d("TranslatorTextTranscriber: already active, skipping start")
             return
         }
+        bufferFlushed = false
         isActive = true
         turnBuffer.clear()
-        pcmBuffer.clear()
 
         val config = SessionConfig(
             model = model,
@@ -105,7 +114,7 @@ ABSOLUTE RULES:
             systemInstruction = systemInstruction,
             inputTranscription = false,
             outputTranscription = false,
-            enableSessionResumption = true,
+            enableSessionResumption = false,
             enableContextCompression = false,
             enableGoogleSearch = false,
             functionDeclarations = emptyList(),
@@ -140,19 +149,30 @@ ABSOLUTE RULES:
         eventJob?.cancel()
         eventJob = null
         turnBuffer.clear()
-        pcmBuffer.clear()
+        scope.launch {
+            pcmBufferMutex.withLock {
+                pcmBuffer.clear()
+                pcmBufferBytes = 0
+                bufferFlushed = false
+            }
+        }
         logger.d("TranslatorTextTranscriber: stopped")
     }
 
     fun sendAudio(pcm: ByteArray) {
         if (!isActive) return
-        if (!client.isReady) {
-            pcmBuffer.add(pcm)
+        if (!client.isReady || !bufferFlushed) {
+            scope.launch {
+                pcmBufferMutex.withLock {
+                    while (pcmBufferBytes + pcm.size > MAX_PCM_BUFFER_BYTES && pcmBuffer.isNotEmpty()) {
+                        val dropped = pcmBuffer.pollFirst()
+                        pcmBufferBytes -= dropped.size
+                    }
+                    pcmBuffer.addLast(pcm)
+                    pcmBufferBytes += pcm.size
+                }
+            }
             return
-        }
-        if (pcmBuffer.isNotEmpty()) {
-            pcmBuffer.forEach { client.sendAudio(it) }
-            pcmBuffer.clear()
         }
         client.sendAudio(pcm)
     }
@@ -166,9 +186,17 @@ ABSOLUTE RULES:
         when (event) {
             is GeminiEvent.SetupComplete -> {
                 logger.d("TranslatorTextTranscriber: ready")
-                if (pcmBuffer.isNotEmpty()) {
-                    pcmBuffer.forEach { client.sendAudio(it) }
-                    pcmBuffer.clear()
+                scope.launch {
+                    pcmBufferMutex.withLock {
+                        if (!bufferFlushed) {
+                            while (pcmBuffer.isNotEmpty()) {
+                                val chunk = pcmBuffer.pollFirst()
+                                pcmBufferBytes -= chunk.size
+                                runCatching { client.sendAudio(chunk) }
+                            }
+                            bufferFlushed = true
+                        }
+                    }
                 }
             }
             is GeminiEvent.ModelText -> {
@@ -196,21 +224,33 @@ ABSOLUTE RULES:
     }
 
     private fun parseAndEmitLive(raw: String) {
-        val originalMatch = Regex("ORIGINAL:(.*?)(?:\\nTRANSLATION:|$)", RegexOption.DOT_MATCHES_ALL).find(raw)
-        val translationMatch = Regex("TRANSLATION:(.*)", RegexOption.DOT_MATCHES_ALL).find(raw)
-        val orig = originalMatch?.groupValues?.get(1)?.trim() ?: ""
-        val trans = translationMatch?.groupValues?.get(1)?.trim() ?: ""
+        val orig = ORIGINAL_REGEX.find(raw)?.groupValues?.get(1)?.trim().orEmpty()
+        val trans = TRANSLATION_REGEX.find(raw)?.groupValues?.get(1)?.trim().orEmpty()
+        if (orig.isEmpty() && trans.isEmpty()) return
         _events.tryEmit(TranscriberEvent.LiveUpdate(orig, trans))
     }
 
     private fun parseAndEmitFinal(raw: String) {
-        val originalMatch = Regex("ORIGINAL:(.*?)(?:\\nTRANSLATION:|$)", RegexOption.DOT_MATCHES_ALL).find(raw)
-        val translationMatch = Regex("TRANSLATION:(.*)", RegexOption.DOT_MATCHES_ALL).find(raw)
-        val orig = originalMatch?.groupValues?.get(1)?.trim() ?: ""
-        val trans = translationMatch?.groupValues?.get(1)?.trim() ?: ""
+        val originalMatch = ORIGINAL_REGEX.find(raw)
+        val translationMatch = TRANSLATION_REGEX.find(raw)
+        val orig = originalMatch?.groupValues?.get(1)?.trim().orEmpty()
+        val trans = translationMatch?.groupValues?.get(1)?.trim().orEmpty()
 
         if (orig.isBlank() && trans.isBlank()) {
-            logger.d("TranslatorTextTranscriber: empty/unintelligible, skipping")
+            val lines = raw.lines().map { it.trim() }.filter { it.isNotEmpty() }
+            if (lines.isEmpty()) {
+                logger.d("TranslatorTextTranscriber: empty/unintelligible, skipping")
+                return
+            }
+            val fallbackOrig = lines.getOrNull(0).orEmpty()
+            val fallbackTrans = lines.getOrNull(1).orEmpty()
+            if (fallbackOrig.isBlank() && fallbackTrans.isBlank()) {
+                logger.d("TranslatorTextTranscriber: empty fallback, skipping")
+                return
+            }
+            val lang = detectLang(fallbackOrig)
+            logger.d("TranslatorTextTranscriber:[$lang fallback] $fallbackOrig -> $fallbackTrans")
+            _events.tryEmit(TranscriberEvent.FinalTurn(fallbackOrig, fallbackTrans, lang))
             return
         }
 
@@ -220,14 +260,36 @@ ABSOLUTE RULES:
     }
 
     private fun detectLang(text: String): String {
-        val lower = text.lowercase()
-        if (lower.any { it in "ієґї" }) return "uk"
-        if (lower.any { it in "а-яё" }) return "ru"
-        if (lower.any { it in "äöüß" } || lower.contains(Regex("\\b(der|die|das|und|ist|ich)\\b"))) return "de"
+        if (text.isBlank()) return "unknown"
+        val hasUkrSpecific = text.any { it in "ієґїІЄҐЇ" }
+        if (hasUkrSpecific) return "uk"
+        val hasCyrillic = text.any { it in 'а'..'я' || it in 'А'..'Я' || it == 'ё' || it == 'Ё' }
+        if (hasCyrillic) {
+            val lower = text.lowercase()
+            val ukrMarkers = listOf("що", "як", "ти", "дякую", "привіт", "є", "вона", "вони")
+            if (ukrMarkers.any { lower.contains(it) }) return "uk"
+            return "ru"
+        }
+        val hasUmlauts = text.any { it in "äöüßÄÖÜ" }
+        if (hasUmlauts) return "de"
+        val hasLatin = text.any { it in 'a'..'z' || it in 'A'..'Z' }
+        if (hasLatin) {
+            val lower = text.lowercase()
+            if (Regex("\\b(der|die|das|und|ist|ich|nicht|haben|wie|geht)\\b").containsMatchIn(lower)) return "de"
+        }
         return "unknown"
     }
 
     fun shutdown() {
-        scope.launch { stop() }
+        isActive = false
+        runCatching { eventJob?.cancel() }
+        runCatching {
+            kotlinx.coroutines.runBlocking {
+                kotlinx.coroutines.withTimeoutOrNull(2_000L) {
+                    client.disconnect()
+                }
+            }
+        }
+        scope.cancel()
     }
 }
