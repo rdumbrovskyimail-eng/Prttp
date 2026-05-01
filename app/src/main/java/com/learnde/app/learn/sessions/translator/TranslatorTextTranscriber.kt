@@ -1,3 +1,4 @@
+// Путь: app/src/main/java/com/learnde/app/learn/sessions/translator/TranslatorTextTranscriber.kt
 package com.learnde.app.learn.sessions.translator
 
 import com.learnde.app.domain.LiveClient
@@ -82,6 +83,7 @@ ABSOLUTE RULES:
             logger.d("TranslatorTextTranscriber: already active, skipping start")
             return
         }
+        isActive = true
         turnBuffer.clear()
         pcmBuffer.clear()
 
@@ -122,11 +124,11 @@ ABSOLUTE RULES:
 
         runCatching { client.connect(apiKey, config, logRaw) }
             .onSuccess {
-                isActive = true
                 logger.d("TranslatorTextTranscriber: connected successfully")
             }
             .onFailure { e ->
                 logger.e("TranslatorTextTranscriber: connect failed: ${e.message}")
+                isActive = false
                 eventJob?.cancel()
             }
     }
@@ -213,7 +215,7 @@ ABSOLUTE RULES:
         }
 
         val lang = detectLang(orig)
-        logger.d("TranslatorTextTranscriber: [$lang] $orig -> $trans")
+        logger.d("TranslatorTextTranscriber:[$lang] $orig -> $trans")
         _events.tryEmit(TranscriberEvent.FinalTurn(orig, trans, lang))
     }
 
