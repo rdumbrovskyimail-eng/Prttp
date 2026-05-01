@@ -61,20 +61,11 @@ class TranslatorTextTranscriber @Inject constructor(
     private val systemInstruction: String = buildString {
         append(TranslatorSession.TRANSLATION_CORE)
         append("\n\n")
-        append("""OUTPUT FORMAT (TEXT) — exactly two lines, no exceptions:
-ORIGINAL: <exact transcript of what the user said, in the original language and script>
-TRANSLATION: <the translation, following the direction rules above>
+        append("""Output format — exactly two lines, every time:
+ORIGINAL: <what the user said, verbatim, in the original language>
+TRANSLATION: <the translation per the HARD RULES above>
 
-ORIGINAL TRANSCRIPT RULES:
-- Use Cyrillic for Russian and Ukrainian. Use Latin with umlauts for German (ä, ö, ü, ß).
-- Distinguish Russian vs Ukrainian by markers: ї, і, є, ґ, "що", "як", "ти", "дякую", "привіт" → Ukrainian; otherwise Russian.
-- Write what the user actually said, verbatim. Do not paraphrase. Do not fix grammar.
-
-ABSOLUTE OUTPUT RULES:
-- Exactly 2 lines: one ORIGINAL line, one TRANSLATION line. Nothing else.
-- No explanations. No alternatives. No commentary. No labels other than ORIGINAL: and TRANSLATION:.
-- Text only. Never speak.
-- If the language is not Russian, Ukrainian or German, or audio is unintelligible — output nothing.""")
+Nothing else. No commentary. No extra lines.""")
     }
 
     suspend fun start(apiKey: String, model: String, logRaw: Boolean) {
