@@ -86,14 +86,18 @@ ABSOLUTE OUTPUT RULES:
         isActive = true
         turnBuffer.clear()
 
+        // ВАЖНО: gemini-3.1-flash-live-preview НЕ поддерживает responseModality=TEXT
+        // (закрывается с 1011 Internal Error). Официальный workaround Google — работать
+        // в AUDIO modality и получать текст через outputAudioTranscription.
+        // Голос модели просто игнорируем (не воспроизводим в этом клиенте).
         val config = SessionConfig(
             model = model,
-            responseModality = "TEXT",
-            temperature = 0.0f,
-            topP = 0.95f,
-            topK = 0,
+            responseModality = "AUDIO",
+            temperature = 0.05f,
+            topP = 0.8f,
+            topK = 20,
             maxOutputTokens = 512,
-            voiceId = "Aoede",
+            voiceId = "Puck",
             languageCode = "",
             latencyProfile = LatencyProfile.Off,
             autoActivityDetection = true,
@@ -103,13 +107,13 @@ ABSOLUTE OUTPUT RULES:
             vadSilenceDurationMs = 350,
             systemInstruction = systemInstruction,
             inputTranscription = false,
-            outputTranscription = false,
+            outputTranscription = true,
             enableSessionResumption = false,
             enableContextCompression = false,
             enableGoogleSearch = false,
             functionDeclarations = emptyList(),
             sendAudioStreamEnd = true,
-            setupTimeoutMs = 8_000L,
+            setupTimeoutMs = 10_000L,
             sendThinkingConfig = false,
         )
 
