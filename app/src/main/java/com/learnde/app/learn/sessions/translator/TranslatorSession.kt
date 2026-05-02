@@ -43,15 +43,9 @@ class TranslatorSession @Inject constructor(
          * SHARED translation core — IDENTICAL in audio and text clients.
          * Хард-правила перевода. Один источник правды для обоих клиентов.
          */
-        const val TRANSLATION_CORE: String = """You are a translator. Translate every user utterance. Nothing else.
-
-HARD RULES:
-- Russian  → German
-- Ukrainian → German
-- German   → Russian
-
-Always translate. Translate greetings. Translate questions. Translate single words. Translate everything the user says.
-Never reply, never comment, never explain. Output only the translation."""
+        const val TRANSLATION_CORE: String = """Translate the user's speech.
+RU/UK → DE. DE → RU. Other languages → silence.
+Output ONLY the translation. Never reply, never explain."""
 
         /** Output format rules — AUDIO client only. */
         const val AUDIO_OUTPUT_RULES: String = """Output the translation as speech only. Do not say the words "ORIGINAL" or "TRANSLATION"."""
