@@ -630,40 +630,31 @@ class LearnCoreViewModel @Inject constructor(
 
         micJob = viewModelScope.launch {
             launch {
-            audioEngine.micOutput.collect { chunk ->
-                val isTranslator = activeSession?.id == "translator"
-                val now = System.currentTimeMillis()
-                val sinceLastAi = now - lastAiAudioChunkAtMs
+                audioEngine.micOutput.collect { chunk ->
+                    val isTranslator = activeSession?.id == "translator"
+                    val now = System.currentTimeMillis()
+                    val sinceLastAi = now - lastAiAudioChunkAtMs
 
-                // Для translator используем агрессивный tail (1000ms) чтобы избежать
-                // echo round-trip: модель слышит свой же голос через speaker → микрофон
-                // и галлюцинирует "cocktail", "Wie geht's dir?" и т.п.
-                val effectiveTailMs = when {
-                    isTranslator -> 1_000L
-                    sessionReadyAtMs > 0L && (now - sessionReadyAtMs) < INITIAL_SESSION_GUARD_MS ->
-                        AI_AUDIO_TAIL_INITIAL_MS
-                    else -> AI_AUDIO_TAIL_MS
-                }
-
-                val aiActuallyAudible =
-                    lastAiAudioChunkAtMs > 0L &&
-                    sinceLastAi < effectiveTailMs
-
-                if (!aiActuallyAudible) {
-                    liveClient.sendAudio(chunk)
-                    if (droppedMicChunks > 0) {
-                        logger.d("Mic: gate opened, dropped $droppedMicChunks chunks during AI tail")
-                        droppedMicChunks = 0
+                    val effectiveTailMs: Long = when {
+                        isTranslator -> 1_000L
+                        sessionReadyAtMs > 0L && (now - sessionReadyAtMs) < INITIAL_SESSION_GUARD_MS ->
+                            AI_AUDIO_TAIL_INITIAL_MS
+                        else -> AI_AUDIO_TAIL_MS
                     }
-                } else {
-                    droppedMicChunks++
-                }
-            }
+
+                    val aiActuallyAudible =
+                        lastAiAudioChunkAtMs > 0L &&
+                        sinceLastAi < effectiveTailMs
+
+                    if (!aiActuallyAudible) {
+                        liveClient.sendAudio(chunk)
+                        if (droppedMicChunks > 0) {
+                            logger.d("Mic: gate opened, dropped $droppedMicChunks chunks during AI tail")
+                            droppedMicChunks = 0
+                        }
                     } else {
                         droppedMicChunks++
                     }
-
-                    // Text-клиент отключён — translator работает только через audio-клиент.
                 }
             }
             micOperationMutex.withLock {
