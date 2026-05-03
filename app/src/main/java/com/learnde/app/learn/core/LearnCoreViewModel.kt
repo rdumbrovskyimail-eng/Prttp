@@ -167,6 +167,10 @@ class LearnCoreViewModel @Inject constructor(
                 userTurnBuffer.clear()
                 modelTurnBuffer.clear()
                 liveModelMessageTs = 0L
+                transcriptMutex.withLock {
+                    transcriptBuffer = emptyList()
+                }
+                _state.update { it.copy(transcript = emptyList(), liveUserTranscript = "") }
             }
         }
     }
