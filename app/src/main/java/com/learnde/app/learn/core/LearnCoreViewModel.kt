@@ -210,17 +210,7 @@ class LearnCoreViewModel @Inject constructor(
         hasModelOutputThisTurn = true
         startStuckTurnWatchdog()
 
-        val current = modelTurnBuffer.toString()
-        when {
-            current.isEmpty() -> modelTurnBuffer.append(text)
-            text == current -> return
-            text.startsWith(current) && text.length > current.length -> {
-                modelTurnBuffer.clear()
-                modelTurnBuffer.append(text)
-            }
-            current.endsWith(text) -> return
-            else -> modelTurnBuffer.append(text)
-        }
+        modelTurnBuffer.append(text)
 
         upsertLiveModelBubble(modelTurnBuffer.toString())
 
