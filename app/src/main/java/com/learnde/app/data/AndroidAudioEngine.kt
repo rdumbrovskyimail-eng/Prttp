@@ -52,7 +52,7 @@ class AndroidAudioEngine(
     @Volatile private var jitterTimeoutMs = 150L
 
     @Volatile private var playbackGain: Float = 0.9f
-    @Volatile private var micGain: Float = 1.0f
+    @Volatile private var micGain: Float = 1.4f
     @Volatile private var forceSpeakerOutput: Boolean = true
 
     // ═══ FLOWS ═══
