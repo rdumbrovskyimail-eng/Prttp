@@ -397,32 +397,15 @@ class GeminiLiveClient(
                 }
 
                 // ─── Транскрипция ───
-                // languageCodes — официальный параметр AudioTranscriptionConfig (BCP-47).
-                // Источник: google.golang.org/genai AudioTranscriptionConfig.LanguageCodes.
-                // Это подсказка для ASR — модель не будет угадывать язык по 100ms аудио,
-                // а ограничится списком указанных языков.
+                // Gemini API v1beta принимает только пустые объекты для inputAudioTranscription
+                // и outputAudioTranscription. Параметр languageCodes есть в Vertex AI, но
+                // отвергается Gemini API с ошибкой "Cannot find field".
                 if (config.sendTranscriptionConfig) {
                     if (config.inputTranscription) {
-                        put("inputAudioTranscription", buildJsonObject {
-                            if (config.transcriptionLanguageCodes.isNotEmpty()) {
-                                put("languageCodes", buildJsonArray {
-                                    config.transcriptionLanguageCodes.forEach {
-                                        add(JsonPrimitive(it))
-                                    }
-                                })
-                            }
-                        })
+                        put("inputAudioTranscription", buildJsonObject {})
                     }
                     if (config.outputTranscription) {
-                        put("outputAudioTranscription", buildJsonObject {
-                            if (config.transcriptionLanguageCodes.isNotEmpty()) {
-                                put("languageCodes", buildJsonArray {
-                                    config.transcriptionLanguageCodes.forEach {
-                                        add(JsonPrimitive(it))
-                                    }
-                                })
-                            }
-                        })
+                        put("outputAudioTranscription", buildJsonObject {})
                     }
                 }
 
