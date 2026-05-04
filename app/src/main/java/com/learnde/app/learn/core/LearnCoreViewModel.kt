@@ -137,6 +137,7 @@ class LearnCoreViewModel @Inject constructor(
     private val modelTurnBuffer = StringBuilder()
 
     @Volatile private var liveModelMessageTs: Long = 0L
+    @Volatile private var translatorFunctionFinalizedThisTurn: Boolean = false
 
     init {
         observeSettings()
@@ -168,6 +169,7 @@ class LearnCoreViewModel @Inject constructor(
                 userTurnBuffer.clear()
                 modelTurnBuffer.clear()
                 liveModelMessageTs = 0L
+                translatorFunctionFinalizedThisTurn = false
                 transcriptMutex.withLock {
                     transcriptBuffer = emptyList()
                 }
@@ -201,10 +203,22 @@ class LearnCoreViewModel @Inject constructor(
         // в transcript уже есть финальное user-сообщение.
         // Не добавляем дубликат от inputAudioTranscription.
         if (activeSession?.id == "translator") {
+            val waitStart = System.currentTimeMillis()
+            val maxWait = 1_200L
+            while (System.currentTimeMillis() - waitStart < maxWait) {
+                val lastUser = transcriptBuffer.lastOrNull { it.role == ConversationMessage.ROLE_USER }
+                // Окно 10 секунд: TurnComplete может прийти через 2-5 сек после функции,
+                // и мы должны узнать что функция уже отработала.
+                if (lastUser != null && (System.currentTimeMillis() - lastUser.timestamp) < 10_000L) {
+                    // record_translation уже записал точную пару — выходим без дублирования
+                    logger.d("finalizeUserTurn[translator]: skip dup, FN already wrote '${lastUser.text}'")
+                    return
+                }
+                kotlinx.coroutines.delay(50)
+            }
             transcriptMutex.withLock {
                 val lastUser = transcriptBuffer.lastOrNull { it.role == ConversationMessage.ROLE_USER }
-                if (lastUser != null && (System.currentTimeMillis() - lastUser.timestamp) < 3_000L) {
-                    // Пара уже добавлена через function call — дубль не нужен
+                if (lastUser != null && (System.currentTimeMillis() - lastUser.timestamp) < 10_000L) {
                     return@withLock
                 }
                 // Функция не пришла — это fallback, добавляем
@@ -229,6 +243,12 @@ class LearnCoreViewModel @Inject constructor(
 
         if (cachedSettings.outputTranscription && source == "ModelText") return
         if (!cachedSettings.outputTranscription && source == "OutputTranscript") return
+
+        // Для translator: если record_translation уже завершил turn — игнорируем
+        // поздние OutputTranscript-дельты, которые иначе создадут "хвостовой" пузырь.
+        if (activeSession?.id == "translator" && translatorFunctionFinalizedThisTurn) {
+            return
+        }
 
         // Первая дельта модели = модель начала отвечать = user-turn закончен.
         // Финализируем user СНАЧАЛА, чтобы он попал в transcript ПЕРЕД model-bubble.
@@ -399,6 +419,11 @@ class LearnCoreViewModel @Inject constructor(
                 liveModelMessageTs = 0L
                 userTurnBuffer.clear()
                 modelTurnBuffer.clear()
+
+                // 4. Помечаем turn как завершённый функцией —
+                //    приходящие позже OutputTranscript-дельты должны игнорироваться,
+                //    иначе они создадут "хвостовой" пузырь типа "essen." или "ist."
+                translatorFunctionFinalizedThisTurn = true
             }
         }
     }
@@ -831,6 +856,7 @@ class LearnCoreViewModel @Inject constructor(
                         _state.update { it.copy(isAiSpeaking = false) }
                         modelStartedSpeakingThisTurn = false
                         hasModelOutputThisTurn = false
+                        translatorFunctionFinalizedThisTurn = false
                         cancelStuckTurnWatchdog()
                         cancelTextWithoutAudioWatchdog()
                     }
@@ -844,6 +870,8 @@ class LearnCoreViewModel @Inject constructor(
                         transcriptChannel.trySend(TranscriptOp.ModelTurnComplete)
                         modelStartedSpeakingThisTurn = false
                         hasModelOutputThisTurn = false
+                        // Сбрасываем флаг — следующий turn ещё не финализирован функцией
+                        translatorFunctionFinalizedThisTurn = false
                         cancelStuckTurnWatchdog()
                         cancelTextWithoutAudioWatchdog()
 
