@@ -766,7 +766,7 @@ class LearnCoreViewModel @Inject constructor(
                     val sinceLastAi = now - lastAiAudioChunkAtMs
 
                     val effectiveTailMs: Long = when {
-                        isTranslator -> 1_000L
+                        isTranslator -> 300L
                         sessionReadyAtMs > 0L && (now - sessionReadyAtMs) < INITIAL_SESSION_GUARD_MS ->
                             AI_AUDIO_TAIL_INITIAL_MS
                         else -> AI_AUDIO_TAIL_MS
