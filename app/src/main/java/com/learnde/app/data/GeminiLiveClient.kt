@@ -397,12 +397,32 @@ class GeminiLiveClient(
                 }
 
                 // ─── Транскрипция ───
+                // languageCodes — официальный параметр AudioTranscriptionConfig (BCP-47).
+                // Источник: google.golang.org/genai AudioTranscriptionConfig.LanguageCodes.
+                // Это подсказка для ASR — модель не будет угадывать язык по 100ms аудио,
+                // а ограничится списком указанных языков.
                 if (config.sendTranscriptionConfig) {
                     if (config.inputTranscription) {
-                        put("inputAudioTranscription", buildJsonObject {})
+                        put("inputAudioTranscription", buildJsonObject {
+                            if (config.transcriptionLanguageCodes.isNotEmpty()) {
+                                put("languageCodes", buildJsonArray {
+                                    config.transcriptionLanguageCodes.forEach {
+                                        add(JsonPrimitive(it))
+                                    }
+                                })
+                            }
+                        })
                     }
                     if (config.outputTranscription) {
-                        put("outputAudioTranscription", buildJsonObject {})
+                        put("outputAudioTranscription", buildJsonObject {
+                            if (config.transcriptionLanguageCodes.isNotEmpty()) {
+                                put("languageCodes", buildJsonArray {
+                                    config.transcriptionLanguageCodes.forEach {
+                                        add(JsonPrimitive(it))
+                                    }
+                                })
+                            }
+                        })
                     }
                 }
 
