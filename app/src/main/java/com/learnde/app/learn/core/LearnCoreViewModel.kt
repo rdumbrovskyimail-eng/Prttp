@@ -118,6 +118,7 @@ class LearnCoreViewModel @Inject constructor(
     @Volatile private var lastModelActivityAtMs: Long = 0L
     @Volatile private var sessionReadyAtMs: Long = 0L
     @Volatile private var hasModelOutputThisTurn: Boolean = false
+    @Volatile private var translatorForceMicOpenUntilMs: Long = 0L
 
     private val transcriptMutex = Mutex()
     @Volatile private var transcriptBuffer: List<ConversationMessage> = emptyList()
@@ -453,6 +454,10 @@ class LearnCoreViewModel @Inject constructor(
                 cancelStuckTurnWatchdog()
                 cancelTextWithoutAudioWatchdog()
                 lastAiAudioChunkAtMs = 0L
+                // Принудительно держим микрофон открытым 800мс после функции —
+                // даже если модель ещё доигрывает остаток аудио, пользователь должен
+                // иметь возможность сразу говорить следующую фразу.
+                translatorForceMicOpenUntilMs = System.currentTimeMillis() + 800L
             }
         }
     }
@@ -772,7 +777,13 @@ class LearnCoreViewModel @Inject constructor(
                         else -> AI_AUDIO_TAIL_MS
                     }
 
+                    // Принудительное открытие микрофона после record_translation —
+                    // позволяет пользователю говорить сразу следующую фразу,
+                    // не дожидаясь пока модель доиграет остаток своего аудио.
+                    val forceOpen = isTranslator && now < translatorForceMicOpenUntilMs
+
                     val aiActuallyAudible =
+                        !forceOpen &&
                         lastAiAudioChunkAtMs > 0L &&
                         sinceLastAi < effectiveTailMs
 
