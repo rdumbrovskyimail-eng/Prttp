@@ -143,6 +143,7 @@ class LearnCoreViewModel @Inject constructor(
         observeGeminiEvents()
         observeArbiter()
         observeVocabularyViolations()
+        observeTranslatorFunctionTranscripts()
         startTranscriptProcessor()
         viewModelScope.launch { audioEngine.initPlayback() }
     }
