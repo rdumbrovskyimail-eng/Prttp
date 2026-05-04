@@ -496,6 +496,10 @@ class LearnCoreViewModel @Inject constructor(
             systemInstruction = finalSystemInstruction,
             inputTranscription = inputTranscr,
             outputTranscription = outputTranscr,
+            transcriptionLanguageCodes = if (isTranslator)
+                listOf("ru-RU", "uk-UA", "de-DE")
+            else
+                emptyList(),
             enableSessionResumption = false,
             sendSessionResumptionConfig = if (isTranslator) false else true,
             sessionHandle = null,
