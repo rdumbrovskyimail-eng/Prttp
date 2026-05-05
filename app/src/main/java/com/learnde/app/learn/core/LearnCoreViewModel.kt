@@ -460,10 +460,10 @@ class LearnCoreViewModel @Inject constructor(
                 cancelStuckTurnWatchdog()
                 cancelTextWithoutAudioWatchdog()
                 lastAiAudioChunkAtMs = 0L
-                // Принудительно держим микрофон открытым 800мс после функции —
-                // даже если модель ещё доигрывает остаток аудио, пользователь должен
-                // иметь возможность сразу говорить следующую фразу.
-                translatorForceMicOpenUntilMs = System.currentTimeMillis() + 800L
+                // Принудительно держим микрофон открытым 1500мс после функции —
+                // пользователь должен иметь возможность сразу говорить следующую фразу
+                // даже если модель ещё доигрывает остаток своего аудио.
+                translatorForceMicOpenUntilMs = System.currentTimeMillis() + 1_500L
             }
         }
     }
