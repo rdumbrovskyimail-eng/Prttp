@@ -513,7 +513,7 @@ class LearnCoreViewModel @Inject constructor(
         }
 
         val (silenceMs, prefixMs, temp) = when (session.id) {
-            "translator"   -> Triple(600, 200, 0.2f)  // 600мс паузы перед концом фразы — достаточно чтобы дочитать предложение
+            "translator"   -> Triple(500, 150, 0.1f)  // быстрее реакция, ниже temp = меньше отсебятины
             "a1_situation" -> Triple(1000, 300, cachedSettings.temperature)
             "a1_review"    -> Triple(1000, 300, cachedSettings.temperature)
             else           -> Triple(1000, 300, cachedSettings.temperature)
@@ -526,7 +526,7 @@ class LearnCoreViewModel @Inject constructor(
         val finalLanguageCode = if (isTranslator) "" else cachedSettings.languageCode
         val finalVoiceId = if (isTranslator) "Puck" else cachedSettings.voiceId
         val finalMaxTokens = if (isTranslator) 256 else cachedSettings.maxOutputTokens
-        val finalTopP = if (isTranslator) 0.8f else cachedSettings.topP
+        val finalTopP = if (isTranslator) 0.6f else cachedSettings.topP  // меньше отсебятины
         val finalTopK = if (isTranslator) 20 else cachedSettings.topK
 
         val inputTranscr = if (isTranslator) true else cachedSettings.inputTranscription
@@ -544,7 +544,9 @@ class LearnCoreViewModel @Inject constructor(
             languageCode = finalLanguageCode,
             latencyProfile = profile,
             autoActivityDetection = cachedSettings.enableServerVad,
-            vadStartSensitivity = if (isTranslator) "START_SENSITIVITY_LOW"
+            // Для переводчика на расстоянии: HIGH чувствительность старта (быстро реагирует на тихую речь)
+            // и LOW конца (даём договорить до конца перед концом фразы)
+            vadStartSensitivity = if (isTranslator) "START_SENSITIVITY_HIGH"
                 else if (cachedSettings.vadStartOfSpeechSensitivity > 0.5f) "START_SENSITIVITY_HIGH"
                 else "START_SENSITIVITY_LOW",
             vadEndSensitivity = if (isTranslator) "END_SENSITIVITY_LOW"
@@ -555,10 +557,7 @@ class LearnCoreViewModel @Inject constructor(
             systemInstruction = finalSystemInstruction,
             inputTranscription = inputTranscr,
             outputTranscription = outputTranscr,
-            transcriptionLanguageCodes = if (isTranslator)
-                listOf("ru-RU", "uk-UA", "de-DE")
-            else
-                emptyList(),
+            transcriptionLanguageCodes = emptyList(),
             enableSessionResumption = false,
             sendSessionResumptionConfig = if (isTranslator) false else true,
             sessionHandle = null,
