@@ -52,7 +52,7 @@ class AndroidAudioEngine(
     @Volatile private var jitterTimeoutMs = 150L
 
     @Volatile private var playbackGain: Float = 0.9f
-    @Volatile private var micGain: Float = 1.4f
+    @Volatile private var micGain: Float = 2.0f  // максимум для дистанции 40см
     @Volatile private var forceSpeakerOutput: Boolean = true
 
     // ═══ FLOWS ═══
@@ -206,13 +206,15 @@ class AndroidAudioEngine(
             // ═══ Программный AGC ═══
             // Нормализует пик до целевого уровня. Тихие фразы усиливаются,
             // громкие — нет. Soft-clip защита от перегрузки.
-            var rollingPeak = 8000        // стартовый уровень
-            val targetPeak = 22000        // ~67% от Short.MAX (запас на soft-clip)
-            val agcAttack = 0.3f          // быстрая реакция на громкие звуки
-            val agcRelease = 0.02f        // медленный спад
-            val agcMaxBoost = 4.0f        // не усиливаем тишину больше чем в 4x
-            val agcMinBoost = 0.5f
-            val noiseFloor = 600          // ниже этого порога — это шум, не усиливаем
+            // Настройки для съёма речи на расстоянии до 40см.
+            // Агрессивный boost тихих звуков, низкий noise floor.
+            var rollingPeak = 4000        // ниже стартовый уровень — быстрее догонит тихую речь
+            val targetPeak = 24000        // ~73% от Short.MAX, чуть ближе к пику
+            val agcAttack = 0.4f          // быстрее реакция на изменение громкости
+            val agcRelease = 0.015f       // ещё медленнее спад — стабильнее усиление
+            val agcMaxBoost = 8.0f        // ВДВОЕ больший boost для тихих фраз с 40см
+            val agcMinBoost = 0.6f
+            val noiseFloor = 300          // вдвое ниже порог — захватываем тихую речь
 
             try {
                 while (isActive && isCapturing) {
