@@ -572,6 +572,7 @@ class LearnCoreViewModel @Inject constructor(
             sessionHandle = null,
             enableContextCompression = false,
             sendContextCompressionConfig = if (isTranslator) false else true,
+            sendTranscriptionConfig = if (isTranslator) false else true,
             enableGoogleSearch = false,
             functionDeclarations = session.functionDeclarations,
             sendAudioStreamEnd = cachedSettings.sendAudioStreamEnd,
