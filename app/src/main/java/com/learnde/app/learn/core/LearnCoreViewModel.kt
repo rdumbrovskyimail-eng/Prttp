@@ -1410,6 +1410,7 @@ class LearnCoreViewModel @Inject constructor(
         greetingFallbackJob?.cancel()
         setupJob?.cancel()
         finishGraceJob?.cancel()
+        transcriberObserverJob?.cancel()
         cancelStuckTurnWatchdog()
         cancelTextWithoutAudioWatchdog()
         statusBus.reset()
