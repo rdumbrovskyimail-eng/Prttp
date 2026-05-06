@@ -538,8 +538,8 @@ class LearnCoreViewModel @Inject constructor(
         // Для translator транскрипция выключена — record_translation function call
         // даёт точный текст оригинала и перевода. ASR Gemini Live мисхёрит языки
         // ("preto sim" вместо "Привіт"), и эти данные нам не нужны.
-        val inputTranscr = if (isTranslator) false else cachedSettings.inputTranscription
-        val outputTranscr = if (isTranslator) false else cachedSettings.outputTranscription
+        val inputTranscr = false
+        val outputTranscr = false
 
         return SessionConfig(
             model = cachedSettings.model,
