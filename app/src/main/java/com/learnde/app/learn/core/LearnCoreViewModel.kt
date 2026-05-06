@@ -52,6 +52,7 @@ class LearnCoreViewModel @Inject constructor(
     private val registry: LearnSessionRegistry,
     private val vocabularyEnforcer: com.learnde.app.learn.domain.VocabularyEnforcer,
     private val translatorSession: com.learnde.app.learn.sessions.translator.TranslatorSession,
+    private val voskModelLoader: com.learnde.app.data.vosk.VoskModelLoader,
 ) : ViewModel() {
 
     companion object {
@@ -726,6 +727,18 @@ class LearnCoreViewModel @Inject constructor(
 
         // Translator работает на одном audio-клиенте с input/output audio transcription.
         // Параллельный text-клиент отключён — он добавлял латентность из-за общего rate-pool.
+
+        // [ВРЕМЕННО, для теста Шаг 2] — пробуем загрузить Vosk модели
+        if (session.id == "translator") {
+            viewModelScope.launch {
+                runCatching {
+                    val (ru, de) = voskModelLoader.loadModels()
+                    logger.d("✓ VOSK MODELS READY: ru=$ru, de=$de")
+                }.onFailure { e ->
+                    logger.e("✗ VOSK MODELS FAILED: ${e.message}", e)
+                }
+            }
+        }
 
         logger.d("◀ Learn.startInternal — awaiting SetupComplete")
     }
