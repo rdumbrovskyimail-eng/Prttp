@@ -72,27 +72,7 @@ de → ru
     }
 
     override suspend fun handleToolCall(call: FunctionCall): String? {
-        return when (call.name) {
-            "record_translation" -> {
-                val original = call.args["original"]?.trim().orEmpty()
-                val translation = call.args["translation"]?.trim().orEmpty()
-                val sourceLang = call.args["source_lang"]?.trim()?.lowercase().orEmpty()
-
-                if (original.isEmpty() || translation.isEmpty()) {
-                    logger.w("record_translation: пустые поля, игнорирую")
-                    return """{"status":"empty_skipped"}"""
-                }
-
-                logger.d("record_translation[$sourceLang]: '$original' → '$translation'")
-                _functionTranscripts.tryEmit(
-                    TranslationPair(original, translation, sourceLang)
-                )
-                """{"status":"ok"}"""
-            }
-            else -> {
-                logger.w("TranslatorSession: unexpected tool call ${call.name}")
-                null
-            }
-        }
+        // В voice-only режиме функции не используются
+        return null
     }
 }
