@@ -470,17 +470,60 @@ class LearnCoreViewModel @Inject constructor(
         when (event) {
             is GeminiEvent.Connected -> logger.d("Transcriber ← Connected")
             is GeminiEvent.SetupComplete -> logger.d("Transcriber ← ✓ SetupComplete")
-            is GeminiEvent.ModelText -> logger.d("Transcriber ← TEXT: ${event.text}")
-            is GeminiEvent.TurnComplete -> logger.d("Transcriber ← TurnComplete")
+
+            is GeminiEvent.ModelText -> {
+                transcriberBuffer.append(event.text)
+                val partial = transcriberBuffer.toString()
+                // Live-обновление: показываем текущее состояние парсинга,
+                // даже если TRANS ещё не пришёл (юзер видит свой ORIG раньше).
+                val orig = origRegex.find(partial)?.groupValues?.get(1)?.trim().orEmpty()
+                val trans = transRegex.find(partial)?.groupValues?.get(1)?.trim().orEmpty()
+                if (orig.isNotEmpty() || trans.isNotEmpty()) {
+                    _state.update {
+                        it.copy(
+                            translatorOriginal = orig.ifEmpty { it.translatorOriginal },
+                            translatorTranslation = trans.ifEmpty { it.translatorTranslation },
+                        )
+                    }
+                }
+            }
+
+            is GeminiEvent.TurnComplete -> {
+                val full = transcriberBuffer.toString().trim()
+                transcriberBuffer.clear()
+                if (full.isEmpty()) {
+                    logger.d("Transcriber ← TurnComplete (empty)")
+                    return
+                }
+                val orig = origRegex.find(full)?.groupValues?.get(1)?.trim().orEmpty()
+                val trans = transRegex.find(full)?.groupValues?.get(1)?.trim().orEmpty()
+                logger.d("Transcriber ← PAIR: '$orig' → '$trans'")
+                _state.update {
+                    it.copy(
+                        translatorOriginal = orig,
+                        translatorTranslation = trans,
+                    )
+                }
+            }
+
+            is GeminiEvent.Interrupted -> {
+                logger.d("Transcriber ← Interrupted, dropping buffer")
+                transcriberBuffer.clear()
+            }
+
             is GeminiEvent.Disconnected -> {
                 logger.d("Transcriber ← Disconnected: ${event.code} ${event.reason}")
                 transcriberEnabled = false
+                transcriberBuffer.clear()
             }
+
             is GeminiEvent.ConnectionError -> {
                 logger.e("Transcriber ← Error: ${event.message}")
                 transcriberEnabled = false
+                transcriberBuffer.clear()
             }
-            else -> { /* остальные события игнорируем */ }
+
+            else -> { /* остальное игнорируем */ }
         }
     }
 
