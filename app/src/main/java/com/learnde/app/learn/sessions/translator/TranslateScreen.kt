@@ -203,21 +203,11 @@ fun TranslatorScreen(
                     .fillMaxWidth()
                     .weight(1f)
             ) {
-                if (learnState.transcript.isEmpty() && learnState.liveUserTranscript.isEmpty()) {
-                    EmptyHint(
-                        isActive = isActive,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    FloatingTranscript(
-                        messages = learnState.transcript,
-                        liveUserText = learnState.liveUserTranscript,
-                        showThinking = isActive
-                            && learnState.isMicActive
-                            && !learnState.isAiSpeaking
-                            && learnState.transcript.lastOrNull()?.role != ConversationMessage.ROLE_USER,
-                    )
-                }
+                // Voice-only режим: никаких пузырей, только подсказка и визуализация частиц
+                EmptyHint(
+                    isActive = isActive,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
 
             Box(
