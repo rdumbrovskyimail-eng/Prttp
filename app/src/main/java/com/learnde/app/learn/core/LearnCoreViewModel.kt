@@ -107,6 +107,8 @@ class LearnCoreViewModel @Inject constructor(
 
     private var stuckTurnWatchdogJob: Job? = null
     private var textWithoutAudioJob: Job? = null
+    private var transcriberObserverJob: Job? = null
+    @Volatile private var transcriberEnabled: Boolean = false
 
     @Volatile private var lastInputTs: Long = 0L
     @Volatile private var modelStartedSpeakingThisTurn = false
