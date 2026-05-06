@@ -978,6 +978,7 @@ Strict rules:
         }
 
         micJob = viewModelScope.launch {
+            // Fan-out 1: voice-клиент (translator) — со всем gating и tail-логикой
             launch {
                 audioEngine.micOutput.collect { chunk ->
                     val isTranslator = activeSession?.id == "translator"
@@ -985,17 +986,12 @@ Strict rules:
                     val sinceLastAi = now - lastAiAudioChunkAtMs
 
                     val effectiveTailMs: Long = when {
-                        // Translator voice-only: микрофон закрыт минимально, чтобы избежать
-                        // эха своего голоса, но не блокировать пользователя.
                         isTranslator -> 0L
                         sessionReadyAtMs > 0L && (now - sessionReadyAtMs) < INITIAL_SESSION_GUARD_MS ->
                             AI_AUDIO_TAIL_INITIAL_MS
                         else -> AI_AUDIO_TAIL_MS
                     }
 
-                    // Принудительное открытие микрофона после record_translation —
-                    // позволяет пользователю говорить сразу следующую фразу,
-                    // не дожидаясь пока модель доиграет остаток своего аудио.
                     val forceOpen = isTranslator && now < translatorForceMicOpenUntilMs
 
                     val aiActuallyAudible =
@@ -1009,6 +1005,26 @@ Strict rules:
                             logger.d("Mic: gate opened, dropped $droppedMicChunks chunks during AI tail")
                             droppedMicChunks = 0
                         }
+                    } else {
+                        droppedMicChunks++
+                    }
+                }
+            }
+
+            // Fan-out 2: transcriber-клиент (text-only). Без gating —
+            // эхо чужого аудио для текстовой ветки безопасно, AEC уже отрабатывает.
+            launch {
+                audioEngine.micOutput.collect { chunk ->
+                    if (transcriberEnabled && transcriberClient.isReady) {
+                        runCatching { transcriberClient.sendAudio(chunk) }
+                    }
+                }
+            }
+
+            micOperationMutex.withLock {
+                audioEngine.startCapture()
+            }
+        }
                     } else {
                         droppedMicChunks++
                     }
