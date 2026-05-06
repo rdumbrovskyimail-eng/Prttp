@@ -9,7 +9,11 @@ permissions:
   contents: write
 
 jobs:
+  prepare-vosk:
+    uses: ./.github/workflows/prepare-vosk-models.yml
+
   build-and-release:
+    needs: prepare-vosk
     runs-on: ubuntu-24.04
 
     steps:
@@ -19,6 +23,19 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+
+      - name: Download Vosk models
+        uses: actions/download-artifact@v4
+        with:
+          name: vosk-models
+          path: app/src/main/assets/vosk/
+
+      - name: Verify Vosk models in build tree
+        run: |
+          test -f app/src/main/assets/vosk/ru/am/final.mdl
+          test -f app/src/main/assets/vosk/de/am/final.mdl
+          echo "✓ Vosk models in place"
+          du -sh app/src/main/assets/vosk/ru app/src/main/assets/vosk/de
 
       - uses: gradle/actions/setup-gradle@v4
         with:
