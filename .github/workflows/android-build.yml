@@ -60,6 +60,36 @@ jobs:
             -Dorg.gradle.parallel=true \
             -Dandroid.enableJetifier=false
 
+      - name: Pack APK into compressed zip
+        id: pack
+        run: |
+          set -e
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          APK_SIZE=$(stat -c%s "$APK_PATH")
+          APK_MB=$((APK_SIZE / 1024 / 1024))
+          
+          echo "▶ Original APK: ${APK_MB} MB"
+          
+          # Создаём папку для архива
+          mkdir -p release-assets
+          
+          # Упаковываем APK с максимальным deflate-сжатием (-9).
+          # Используем zip как самый кросс-платформенный формат —
+          # любой пользователь распакует штатными средствами Windows/Mac/Linux/Android.
+          ZIP_NAME="LearnDe-v1.0.${{ github.run_number }}.zip"
+          zip -9 "release-assets/$ZIP_NAME" "$APK_PATH"
+          
+          ZIP_SIZE=$(stat -c%s "release-assets/$ZIP_NAME")
+          ZIP_MB=$((ZIP_SIZE / 1024 / 1024))
+          RATIO=$(echo "scale=1; ($APK_MB - $ZIP_MB) * 100 / $APK_MB" | bc)
+          
+          echo "✓ Compressed: ${ZIP_MB} MB (saved ${RATIO}%)"
+          echo "zip_path=release-assets/$ZIP_NAME" >> $GITHUB_OUTPUT
+          echo "zip_name=$ZIP_NAME" >> $GITHUB_OUTPUT
+          echo "apk_mb=$APK_MB" >> $GITHUB_OUTPUT
+          echo "zip_mb=$ZIP_MB" >> $GITHUB_OUTPUT
+          echo "ratio=$RATIO" >> $GITHUB_OUTPUT
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -68,6 +98,15 @@ jobs:
           body: |
             **Commit:** `${{ github.event.head_commit.message }}`
             **SHA:** `${{ github.sha }}`
-          files: app/build/outputs/apk/debug/app-debug.apk
+            
+            **Размер:**
+            • APK (распакованный): ${{ steps.pack.outputs.apk_mb }} MB
+            • ZIP (для скачивания): ${{ steps.pack.outputs.zip_mb }} MB
+            • Экономия: ${{ steps.pack.outputs.ratio }}%
+            
+            **Установка:** скачайте `${{ steps.pack.outputs.zip_name }}`, распакуйте, установите APK на телефон.
+          files: |
+            ${{ steps.pack.outputs.zip_path }}
+            app/build/outputs/apk/debug/app-debug.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
