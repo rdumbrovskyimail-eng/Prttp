@@ -122,6 +122,22 @@ class LearnCoreViewModel @Inject constructor(
     @Volatile private var hasModelOutputThisTurn: Boolean = false
     @Volatile private var translatorForceMicOpenUntilMs: Long = 0L
 
+    // ════════════════════════════════════════════════════════════
+    //  Translator: формирование пар (Vosk → state.translatorPairs)
+    // ════════════════════════════════════════════════════════════
+
+    /** ID следующей создаваемой пары (монотонно растёт). */
+    @Volatile private var nextPairId: Long = 1L
+
+    /** ID пары которая сейчас "открыта" — туда дописываются partial/final. */
+    @Volatile private var currentOpenPairId: Long? = null
+
+    /** true если в текущей открытой паре уже зафиксирован MIC FINAL. */
+    @Volatile private var currentPairOriginalFinalized: Boolean = false
+
+    /** true если в текущей открытой паре уже зафиксирован PLAYBACK FINAL. */
+    @Volatile private var currentPairTranslationFinalized: Boolean = false
+
     private val transcriptMutex = Mutex()
     @Volatile private var transcriptBuffer: List<ConversationMessage> = emptyList()
     @Volatile private var pendingVocabViolation: VocabularyViolation? = null
@@ -384,6 +400,147 @@ class LearnCoreViewModel @Inject constructor(
     private fun cancelTextWithoutAudioWatchdog() {
         textWithoutAudioJob?.cancel()
         textWithoutAudioJob = null
+    }
+
+    /**
+     * Стартует подписку на Vosk events и формирует TranslationPair'ы в state.
+     *
+     * Логика создания пар:
+     *  • MIC partial:
+     *      - если текущая пара "закрыта" (в ней есть и MIC final и PLAYBACK final) → создаём новую
+     *      - если текущая пара открыта → обновляем originalText
+     *  • MIC final:
+     *      - дописываем в текущую пару, помечаем originalIsFinal=true
+     *  • PLAYBACK partial / final → аналогично, но в translation*
+     */
+    private fun observeVoskEvents() {
+        viewModelScope.launch {
+            voskTranscriber.events.collect { event ->
+                when (event) {
+                    is com.learnde.app.data.vosk.VoskEvent.Partial -> handleVoskPartial(event)
+                    is com.learnde.app.data.vosk.VoskEvent.Final -> handleVoskFinal(event)
+                }
+            }
+        }
+    }
+
+    private fun handleVoskPartial(event: com.learnde.app.data.vosk.VoskEvent.Partial) {
+        when (event.source) {
+            com.learnde.app.data.vosk.VoskSource.MIC -> {
+                val pairId = ensureOpenPairForMic()
+                updatePair(pairId) { pair ->
+                    pair.copy(
+                        originalText = event.text,
+                        originalIsFinal = false,
+                        originalIsRefined = false,
+                        originalLang = event.lang.tagOrEmpty(),
+                    )
+                }
+            }
+            com.learnde.app.data.vosk.VoskSource.PLAYBACK -> {
+                val pairId = ensureOpenPairForPlayback() ?: return
+                updatePair(pairId) { pair ->
+                    pair.copy(
+                        translationText = event.text,
+                        translationIsFinal = false,
+                        translationIsRefined = false,
+                        translationLang = event.lang.tagOrEmpty(),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun handleVoskFinal(event: com.learnde.app.data.vosk.VoskEvent.Final) {
+        when (event.source) {
+            com.learnde.app.data.vosk.VoskSource.MIC -> {
+                val pairId = ensureOpenPairForMic()
+                updatePair(pairId) { pair ->
+                    pair.copy(
+                        originalText = event.text,
+                        originalIsFinal = true,
+                        originalLang = event.lang.tagOrEmpty(),
+                    )
+                }
+                currentPairOriginalFinalized = true
+            }
+            com.learnde.app.data.vosk.VoskSource.PLAYBACK -> {
+                val pairId = ensureOpenPairForPlayback() ?: return
+                updatePair(pairId) { pair ->
+                    pair.copy(
+                        translationText = event.text,
+                        translationIsFinal = true,
+                        translationLang = event.lang.tagOrEmpty(),
+                    )
+                }
+                currentPairTranslationFinalized = true
+            }
+        }
+    }
+
+    /**
+     * Возвращает id пары для записи MIC-данных.
+     * Создаёт новую пару если предыдущая полностью закрыта.
+     */
+    private fun ensureOpenPairForMic(): Long {
+        val openId = currentOpenPairId
+        if (openId != null) {
+            // Если в открытой паре уже есть и MIC FINAL и PLAYBACK FINAL → она закрыта,
+            // новая MIC активность стартует НОВУЮ пару.
+            val isClosed = currentPairOriginalFinalized && currentPairTranslationFinalized
+            if (!isClosed) return openId
+        }
+        return openNewPair()
+    }
+
+    /**
+     * Возвращает id пары для записи PLAYBACK-данных.
+     * НЕ создаёт пары если её ещё нет (PLAYBACK без MIC = что-то странное).
+     */
+    private fun ensureOpenPairForPlayback(): Long? {
+        return currentOpenPairId
+    }
+
+    /** Создаёт новую пару, делает её текущей. Возвращает её id. */
+    private fun openNewPair(): Long {
+        val id = nextPairId++
+        currentOpenPairId = id
+        currentPairOriginalFinalized = false
+        currentPairTranslationFinalized = false
+
+        val newPair = com.learnde.app.learn.core.TranslationPair(id = id)
+        _state.update { st ->
+            st.copy(translatorPairs = st.translatorPairs + newPair)
+        }
+        return id
+    }
+
+    /** Применяет трансформацию к паре с заданным id. */
+    private fun updatePair(
+        id: Long,
+        transform: (com.learnde.app.learn.core.TranslationPair) -> com.learnde.app.learn.core.TranslationPair,
+    ) {
+        _state.update { st ->
+            val idx = st.translatorPairs.indexOfFirst { it.id == id }
+            if (idx < 0) return@update st
+            val updated = transform(st.translatorPairs[idx])
+            val newList = st.translatorPairs.toMutableList().apply { set(idx, updated) }
+            st.copy(translatorPairs = newList)
+        }
+    }
+
+    /** Очистка пар при старте новой сессии. */
+    private fun resetTranslatorPairs() {
+        currentOpenPairId = null
+        currentPairOriginalFinalized = false
+        currentPairTranslationFinalized = false
+        _state.update { it.copy(translatorPairs = emptyList()) }
+    }
+
+    private fun com.learnde.app.data.vosk.VoskLang.tagOrEmpty(): String = when (this) {
+        com.learnde.app.data.vosk.VoskLang.RU -> "RU"
+        com.learnde.app.data.vosk.VoskLang.DE -> "DE"
+        com.learnde.app.data.vosk.VoskLang.UNKNOWN -> ""
     }
 
     private fun observeVocabularyViolations() {
