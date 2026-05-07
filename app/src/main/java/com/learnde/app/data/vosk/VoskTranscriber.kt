@@ -74,6 +74,12 @@ class VoskTranscriber @Inject constructor(
     @Volatile private var lastMicPartial: String = ""
     @Volatile private var lastPlaybackPartial: String = ""
 
+    // Залипание на языке: если последний FINAL был на этом языке — partial'ы
+    // тоже считаем на этом языке, пока не появится сильное свидетельство обратного.
+    // Защищает от галлюцинаций второго recognizer'а.
+    @Volatile private var stickyMicLang: VoskLang = VoskLang.UNKNOWN
+    @Volatile private var stickyPlaybackLang: VoskLang = VoskLang.UNKNOWN
+
     // Ссылки на playback-recognizer'ы для форсированного finalize
     @Volatile private var recPbRuRef: Recognizer? = null
     @Volatile private var recPbDeRef: Recognizer? = null
@@ -168,6 +174,8 @@ class VoskTranscriber @Inject constructor(
         playbackJob = null
         lastMicPartial = ""
         lastPlaybackPartial = ""
+        stickyMicLang = VoskLang.UNKNOWN
+        stickyPlaybackLang = VoskLang.UNKNOWN
         logger.d("VoskTranscriber: stopped")
     }
 
@@ -226,6 +234,13 @@ class VoskTranscriber @Inject constructor(
 
             val (text, lang) = pickByConfidence(ruResult, deResult)
             if (text.isNotBlank()) {
+                // Запоминаем выигравший язык для последующего залипания partial'ов
+                if (lang != VoskLang.UNKNOWN) {
+                    when (source) {
+                        VoskSource.MIC -> stickyMicLang = lang
+                        VoskSource.PLAYBACK -> stickyPlaybackLang = lang
+                    }
+                }
                 _events.tryEmit(VoskEvent.Final(source, text, lang))
             }
             return
@@ -235,7 +250,18 @@ class VoskTranscriber @Inject constructor(
         // с прошлым chunk'ом этого же recognizer'а.
         val partialRuJson = runCatching { recRu.partialResult }.getOrNull()
         val partialDeJson = runCatching { recDe.partialResult }.getOrNull()
-        val (partialText, partialLang) = pickPartialByLength(partialRuJson, partialDeJson)
+
+        // Sticky-язык: предпочитаем partial с того же языка что и последний FINAL.
+        // Это гасит галлюцинации второго recognizer'а на иностранной речи.
+        val sticky = when (source) {
+            VoskSource.MIC -> stickyMicLang
+            VoskSource.PLAYBACK -> stickyPlaybackLang
+        }
+        val (partialText, partialLang) = pickPartialWithSticky(
+            ruJson = partialRuJson,
+            deJson = partialDeJson,
+            sticky = sticky,
+        )
 
         // Фильтр 1: минимальная длина (отсекает одиночные буквы)
         if (partialText.length < MIN_PARTIAL_LEN) return
@@ -278,18 +304,43 @@ class VoskTranscriber @Inject constructor(
     }
 
     /**
-     * Для partial confidence ещё не доступна (Vosk возвращает только
-     * текст без conf). Берём более длинный — он обычно правильный.
+     * Выбор partial с учётом sticky-языка (последнего выигравшего FINAL).
+     *
+     * Логика:
+     *  • Если sticky установлен И в нём есть текст — берём sticky-язык.
+     *    Игнорируем мусор второго recognizer'а на иностранной речи.
+     *  • Если sticky пустой (начало сессии) — берём более длинный.
+     *  • Если sticky-recognizer почему-то молчит а другой говорит — берём другой.
      */
-    private fun pickPartialByLength(ruJson: String?, deJson: String?): Pair<String, VoskLang> {
+    private fun pickPartialWithSticky(
+        ruJson: String?,
+        deJson: String?,
+        sticky: VoskLang,
+    ): Pair<String, VoskLang> {
         val ruText = extractPartial(ruJson)
         val deText = extractPartial(deJson)
-        return when {
-            ruText.isBlank() && deText.isBlank() -> "" to VoskLang.UNKNOWN
-            ruText.length > deText.length -> ruText to VoskLang.RU
-            deText.length > ruText.length -> deText to VoskLang.DE
-            ruText.isNotBlank() -> ruText to VoskLang.RU
-            else -> deText to VoskLang.DE
+
+        if (ruText.isBlank() && deText.isBlank()) return "" to VoskLang.UNKNOWN
+
+        return when (sticky) {
+            VoskLang.RU -> {
+                // Залипли на RU — берём только если RU есть. Иначе — DE как fallback.
+                if (ruText.isNotBlank()) ruText to VoskLang.RU
+                else deText to VoskLang.DE
+            }
+            VoskLang.DE -> {
+                if (deText.isNotBlank()) deText to VoskLang.DE
+                else ruText to VoskLang.RU
+            }
+            VoskLang.UNKNOWN -> {
+                // Ещё ни один FINAL не пришёл — берём более длинный partial
+                when {
+                    ruText.length > deText.length -> ruText to VoskLang.RU
+                    deText.length > ruText.length -> deText to VoskLang.DE
+                    ruText.isNotBlank() -> ruText to VoskLang.RU
+                    else -> deText to VoskLang.DE
+                }
+            }
         }
     }
 
