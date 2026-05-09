@@ -1171,8 +1171,10 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.InputTranscript -> {
-                        // Для translator транскрипция отключена и не нужна
-                        if (activeSession?.id != "translator") {
+                        // Для Транслейтора кладем сокетную STT про запас! Мы отправим ее Арбитру для корректировок пунктуации и сверки
+                        if (activeSession?.id == "translator") {
+                             lastLiveInputTranscriptSnapshot = event.text
+                        } else {
                             transcriptChannel.trySend(TranscriptOp.UserDelta(event.text))
                         }
                     }
