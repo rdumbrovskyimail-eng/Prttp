@@ -54,6 +54,7 @@ class LearnCoreViewModel @Inject constructor(
     private val translatorSession: com.learnde.app.learn.sessions.translator.TranslatorSession,
     private val voskModelLoader: com.learnde.app.data.vosk.VoskModelLoader,
     private val voskTranscriber: com.learnde.app.data.vosk.VoskTranscriber,
+    private val translationClient: com.learnde.app.data.translator.GeminiTranslationClient,
 ) : ViewModel() {
 
     companion object {
@@ -138,6 +139,13 @@ class LearnCoreViewModel @Inject constructor(
     /** true если в текущей открытой паре уже зафиксирован PLAYBACK FINAL. */
     @Volatile private var currentPairTranslationFinalized: Boolean = false
 
+    /** Буфер PCM микрофона за текущую фразу (от начала речи до TurnComplete). */
+    private val phraseAudioBuffer = java.io.ByteArrayOutputStream()
+    private val phraseAudioMutex = kotlinx.coroutines.sync.Mutex()
+
+    /** Job текущего REST-перевода (для отмены если пользователь начал новую фразу). */
+    @Volatile private var translateJob: Job? = null
+
     private val transcriptMutex = Mutex()
     @Volatile private var transcriptBuffer: List<ConversationMessage> = emptyList()
     @Volatile private var pendingVocabViolation: VocabularyViolation? = null
@@ -164,7 +172,7 @@ class LearnCoreViewModel @Inject constructor(
         observeGeminiEvents()
         observeArbiter()
         observeVocabularyViolations()
-        observeVoskEvents()
+        // observeVoskEvents()  // временно отключено: используем Gemini REST вместо Vosk
         startTranscriptProcessor()
         viewModelScope.launch { audioEngine.initPlayback() }
     }
@@ -887,22 +895,11 @@ class LearnCoreViewModel @Inject constructor(
         // Translator работает на одном audio-клиенте с input/output audio transcription.
         // Параллельный text-клиент отключён — он добавлял латентность из-за общего rate-pool.
 
-        // Translator: ресет пар + старт Vosk-транскрайбера.
-        // Подписка на события Vosk живёт в init{} через observeVoskEvents() —
-        // здесь только запуск самого транскрайбера.
+        // Translator: ресет пар. Vosk временно отключён — текст приходит
+        // из Gemini REST по TurnComplete (см. observeGeminiEvents).
         if (session.id == "translator") {
             resetTranslatorPairs()
-            viewModelScope.launch {
-                runCatching {
-                    voskTranscriber.start(
-                        scope = viewModelScope,
-                        micFlow = audioEngine.micOutput,
-                        playbackFlow = audioEngine.playbackSync,
-                    )
-                }.onFailure { e ->
-                    logger.e("VoskTranscriber start failed: ${e.message}", e)
-                }
-            }
+            // voskTranscriber.start(...) — временно выключено
         }
 
         logger.d("◀ Learn.startInternal — awaiting SetupComplete")
