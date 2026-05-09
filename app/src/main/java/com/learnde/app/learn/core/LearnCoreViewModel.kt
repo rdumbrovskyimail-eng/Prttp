@@ -449,11 +449,7 @@ class LearnCoreViewModel @Inject constructor(
         return if (hasCyrillic) "RU" else "DE"
     }
 
-    private fun com.learnde.app.data.vosk.VoskLang.tagOrEmpty(): String = when (this) {
-        com.learnde.app.data.vosk.VoskLang.RU -> "RU"
-        com.learnde.app.data.vosk.VoskLang.DE -> "DE"
-        com.learnde.app.data.vosk.VoskLang.UNKNOWN -> ""
-    }
+
 
     private fun observeVocabularyViolations() {
         viewModelScope.launch {
