@@ -130,27 +130,17 @@ class LearnCoreViewModel @Inject constructor(
     @Volatile private var restTranslationTriggeredThisTurn = false
 
     // ════════════════════════════════════════════════════════════
-    //  Translator: формирование пар (Vosk → state.translatorPairs)
+    //  Translator: Optimistic UI & Validation (Vosk + Gemini API)
     // ════════════════════════════════════════════════════════════
 
-    /** ID следующей создаваемой пары (монотонно растёт). */
     @Volatile private var nextPairId: Long = 1L
-
-    /** ID пары которая сейчас "открыта" — туда дописываются partial/final. */
     @Volatile private var currentOpenPairId: Long? = null
-
-    /** true если в текущей открытой паре уже зафиксирован MIC FINAL. */
     @Volatile private var currentPairOriginalFinalized: Boolean = false
-
-    /** true если в текущей открытой паре уже зафиксирован PLAYBACK FINAL. */
     @Volatile private var currentPairTranslationFinalized: Boolean = false
 
-    /** Буфер PCM микрофона за текущую фразу (от начала речи до TurnComplete). */
-    private val phraseAudioBuffer = java.io.ByteArrayOutputStream()
-    private val phraseAudioMutex = kotlinx.coroutines.sync.Mutex()
-
-    /** Job текущего REST-перевода (для отмены если пользователь начал новую фразу). */
-    @Volatile private var translateJob: Job? = null
+    // STT Gemini Buffer: Память транскрипта Живого Сокета (прячем, чтоб показать API потом)
+    @Volatile private var lastLiveInputTranscriptSnapshot = ""
+    @Volatile private var refinementTranslateJob: Job? = null
 
     private val transcriptMutex = Mutex()
     @Volatile private var transcriptBuffer: List<ConversationMessage> = emptyList()
