@@ -1196,31 +1196,31 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.ModelText -> {
-                        // --- 1. ТРАНСЛЯЦИЯ В КАРТОЧКУ UI мгновенно (50мс) ---
+                        // СИНХРОННЫЙ LIVE ТЕКСТ! (Летит одновременно с голосом 50 мс задержки)
                         if (activeSession?.id == "translator") {
                             val pairId = currentOpenPairId ?: return@collect
 
                             updatePair(pairId) { pair ->
                                 pair.copy(
-                                    translationText = pair.translationText + event.text,
+                                    translationText = pair.translationText + event.text, // Интерактивная дельта
                                     translationIsFinal = false,
                                     translationIsRefined = false,
-                                    translationLang = "DE"
+                                    translationLang = "DE" // Подсвечиваем тег
                                 )
                             }
+
                             lastModelActivityAtMs = System.currentTimeMillis()
                             hasModelOutputThisTurn = true
                             startStuckTurnWatchdog()
-
                             return@collect
                         }
 
+                        // ...стандартный дефолтный код transcriptChannel для обычного режима остался:
                         if (awaitingInitialGreeting) {
                             awaitingInitialGreeting = false
                             greetingFallbackJob?.cancel()
                         }
-                        if (lastAiAudioChunkAtMs == 0L
-                            || (System.currentTimeMillis() - lastAiAudioChunkAtMs) > 500) {
+                        if (lastAiAudioChunkAtMs == 0L || (System.currentTimeMillis() - lastAiAudioChunkAtMs) > 500) {
                             startTextWithoutAudioWatchdog()
                         }
                         transcriptChannel.trySend(TranscriptOp.ModelDelta(event.text, "ModelText"))
