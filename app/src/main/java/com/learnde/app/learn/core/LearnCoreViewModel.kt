@@ -606,8 +606,8 @@ class LearnCoreViewModel @Inject constructor(
         val finalTopP = if (isTranslator) 0.95f else cachedSettings.topP  // меньше отсебятины
         val finalTopK = if (isTranslator) 0 else cachedSettings.topK
 
-        val inputTranscr = true
-        val outputTranscr = true
+        val inputTranscr = if (isTranslator) false else true
+        val outputTranscr = if (isTranslator) false else true
         val transcriptionLanguageCodes = if (isTranslator) listOf("ru-RU", "de-DE") else emptyList()
 
         return SessionConfig(
