@@ -1210,12 +1210,7 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.TurnComplete -> {
-        // Translator: на конце фразы отправляем накопленный PCM
-        // в Gemini REST для транскрипта + перевода (чёрный текст в карточке).
-        if (activeSession?.id == "translator") {
-            // voskTranscriber.finalizePlayback()  // выключено
-            triggerRestTranslation()
-        }
+                        restTranslationTriggeredThisTurn = false
 
                         // Для translator: если record_translation уже сработал —
                         // observeTranslatorFunctionTranscripts уже добавил финальную пару.
