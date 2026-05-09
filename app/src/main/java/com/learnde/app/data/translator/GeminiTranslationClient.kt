@@ -40,15 +40,10 @@ class GeminiTranslationClient @Inject constructor(
 ) {
 
     companion object {
-        // Самая быстрая модель Gemini 3 series для коротких задач
-        private const val MODEL = "gemini-3-flash-preview"
+        // Самая быстрая модель на май 2026 года для задач с ультра-низкой задержкой
+        private const val MODEL = "gemini-3.1-flash-lite"
         private const val ENDPOINT = "https://generativelanguage.googleapis.com" +
-            "/v1beta/models/$MODEL:generateContent"
-
-        // Стрим возвращает chunks с alt=sse (SSE стандарт). Без alt — JSON-array.
-        // Мы используем JSON-array режим: ?key=...&alt=json — тогда ответ это
-        // массив events, разделяемых "\r\n\r\n". Парсим как поток.
-        // streamGenerateContent без alt - возвращает JSON Array of GenerateContentResponse
+            "/v1beta/models/$MODEL:streamGenerateContent"
     }
 
     private val json = Json {
@@ -64,26 +59,21 @@ class GeminiTranslationClient @Inject constructor(
         .build()
 
     /**
-     * Транскрибирует и переводит аудио-фразу.
-     *
-     * @param pcm16kBytes PCM 16-bit LE 16kHz моно — то что шлём в Gemini Live
-     * @param apiKey API ключ
-     * @return TranslationResult с original/translation либо ошибка через exception
+     * Транскрибирует и переводит аудио-фразу со стримингом результатов.
      */
     suspend fun translate(
         pcm16kBytes: ByteArray,
         apiKey: String,
+        onPartialResult: (TranslationResult) -> Unit
     ): TranslationResult = withContext(Dispatchers.IO) {
 
         if (pcm16kBytes.isEmpty()) {
             return@withContext TranslationResult("", "")
         }
 
-        // 1. Заворачиваем PCM в WAV — Gemini принимает PCM только в WAV-контейнере
         val wavBytes = pcmToWav(pcm16kBytes, sampleRate = 16_000)
         val wavBase64 = Base64.encodeToString(wavBytes, Base64.NO_WRAP)
 
-        // 2. Тело запроса: inline_data с аудио + текстовый промпт
         val body = buildJsonObject {
             put("contents", buildJsonArray {
                 add(buildJsonObject {
@@ -105,10 +95,6 @@ class GeminiTranslationClient @Inject constructor(
                 put("topP", 0.95)
                 put("maxOutputTokens", 256)
                 put("responseMimeType", "application/json")
-                // Убираем thinking — для короткой задачи не нужен, замедляет.
-                put("thinkingConfig", buildJsonObject {
-                    put("thinkingLevel", "minimal")
-                })
             })
         }
 
@@ -116,22 +102,43 @@ class GeminiTranslationClient @Inject constructor(
         val startedAt = System.currentTimeMillis()
         logger.d("GeminiTranslate → POST (${rawBody.length} chars, audio ${pcm16kBytes.size}B)")
 
-        // 3. POST на streamGenerateContent (он быстрее обычного generateContent
-        //    потому что начинает отдавать данные сразу как только модель сгенерила
-        //    первые токены). Для нашей задачи — JSON в одной фразе — выигрыш ~30-40%.
         val request = Request.Builder()
-            .url("$ENDPOINT?key=$apiKey")
+            .url("$ENDPOINT?key=$apiKey&alt=sse")
             .post(rawBody.toRequestBody("application/json".toMediaType()))
             .build()
 
-        val rawResponse: String = try {
+        var fullResponseText = ""
+        var finalOriginal = ""
+        var finalTranslation = ""
+
+        try {
             httpClient.newCall(request).execute().use { resp ->
                 if (!resp.isSuccessful) {
                     val errBody = resp.body?.string().orEmpty().take(500)
                     logger.e("GeminiTranslate ← HTTP ${resp.code}: $errBody")
                     throw IllegalStateException("Gemini REST ${resp.code}: $errBody")
                 }
-                resp.body?.string() ?: throw IllegalStateException("Empty response body")
+
+                val source = resp.body?.source() ?: throw IllegalStateException("Empty response body")
+                
+                while (!source.exhausted()) {
+                    val line = source.readUtf8Line() ?: break
+                    if (line.startsWith("data: ")) {
+                        val data = line.substring(6)
+                        if (data == "[DONE]") break
+                        
+                        val chunkText = extractTextFromChunk(data)
+                        fullResponseText += chunkText
+                        
+                        val orig = extractPartialJsonField(fullResponseText, "original")
+                        val trans = extractPartialJsonField(fullResponseText, "translation")
+                        
+                        finalOriginal = orig
+                        finalTranslation = trans
+                        
+                        onPartialResult(TranslationResult(orig, trans))
+                    }
+                }
             }
         } catch (e: Exception) {
             val elapsed = System.currentTimeMillis() - startedAt
@@ -140,10 +147,9 @@ class GeminiTranslationClient @Inject constructor(
         }
 
         val elapsed = System.currentTimeMillis() - startedAt
-        logger.d("GeminiTranslate ← ${elapsed}ms, ${rawResponse.length} chars")
+        logger.d("GeminiTranslate ← ${elapsed}ms, stream finished")
 
-        val generatedText = extractTextFromChunk(rawResponse)
-        return@withContext parseFinalJson(generatedText)
+        return@withContext TranslationResult(finalOriginal.trim(), finalTranslation.trim())
     }
 
     /** Извлекает .candidates[0].content.parts[*].text из одного chunk'а */
@@ -161,6 +167,14 @@ class GeminiTranslationClient @Inject constructor(
                 }
             }
         }.getOrDefault("")
+    }
+
+    // Вспомогательная функция для извлечения текста из недописанного JSON
+    private fun extractPartialJsonField(jsonString: String, fieldName: String): String {
+        val regex = "\"$fieldName\"\\s*:\\s*\"([^\"]*)".toRegex()
+        val match = regex.find(jsonString)
+        val raw = match?.groupValues?.get(1) ?: ""
+        return raw.replace("\\n", "\n").replace("\\\"", "\"")
     }
 
     /** Парсит финальный аккумулированный JSON ответа от модели. */
