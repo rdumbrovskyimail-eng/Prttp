@@ -1,13 +1,12 @@
+// Путь: app/src/main/java/com/learnde/app/data/translator/GeminiTranslationClient.kt
 package com.learnde.app.data.translator
 
-import android.util.Base64
 import com.learnde.app.util.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -16,7 +15,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,135 +24,94 @@ class GeminiTranslationClient @Inject constructor(
     private val logger: AppLogger,
 ) {
     companion object {
-        // Возвращаем рабочую модель, которая не выдает 404
-        private const val MODEL = "gemini-3-flash-preview" 
-        private const val ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL:streamGenerateContent"
+        // Ультрабыстрая модель чисто для корректировки готового текста (200-400 мс)
+        private const val MODEL = "gemini-3.1-flash-lite-preview"
+        private const val ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL:generateContent"
     }
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     private val httpClient = OkHttpClient.Builder()
-        .callTimeout(15, TimeUnit.SECONDS)
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .callTimeout(5, TimeUnit.SECONDS)     // Требуем скорости от легковесных задач!
+        .connectTimeout(3, TimeUnit.SECONDS)
         .build()
 
-    suspend fun translate(
-        pcm16kBytes: ByteArray,
-        apiKey: String,
-        onPartialResult: (TranslationResult) -> Unit
+    /**
+     * PHASE 2: Мгновенная интеллектуальная сверка драфтов (REST)
+     * Входные тексты взяты прямо с оперативной памяти STT и Socket_Response. 
+     * Больше никакого Base64 AudioUpload. Трафик запроса ~400 байт.
+     */
+    suspend fun refine(
+        voskRawOriginal: String,
+        socketInputTranscript: String, 
+        liveTranslationRaw: String,
+        apiKey: String
     ): TranslationResult = withContext(Dispatchers.IO) {
 
-        if (pcm16kBytes.isEmpty()) return@withContext TranslationResult("", "")
+        val requestStartTime = System.currentTimeMillis()
 
-        val wavBytes = pcmToWav(pcm16kBytes, sampleRate = 16_000)
-        val wavBase64 = Base64.encodeToString(wavBytes, Base64.NO_WRAP)
+        // Создаем системный жесткий JSON-указатель
+        val systemInstructionStr = """
+            Ты ультрабыстрый авто-редактор системы "Синхронного Переводчика" (Русский ↔ Немецкий). 
+            Сравни два сырых варианта фразы человека и сырой текст-перевод (Ответ нейросети). 
+            Удали мусор (эканья, обрывки). Собери одну безупречную оригинальную фразу и один правильный литературный перевод этой фразы с пунктуацией и заглавными буквами. 
+            Если STT услышал язык неверно - переосмысли его! В JSON выведи исключительно ДВЕ готовые идеальные строки.
+        """.trimIndent()
+
+        val dataText = """
+            [ИСХОДНЫЕ ДАННЫЕ]
+            Вариант 1 STT (Локально-Быстрый): "$voskRawOriginal"
+            Вариант 2 STT (ЛивМодель-Умный): "$socketInputTranscript"
+            Перевод Нейросети на слух: "$liveTranslationRaw"
+        """.trimIndent()
 
         val body = buildJsonObject {
+            put("systemInstruction", buildJsonObject {
+                put("parts", buildJsonArray { add(buildJsonObject { put("text", systemInstructionStr) }) })
+            })
             put("contents", buildJsonArray {
                 add(buildJsonObject {
-                    put("parts", buildJsonArray {
-                        add(buildJsonObject {
-                            put("inline_data", buildJsonObject {
-                                put("mime_type", "audio/wav")
-                                put("data", wavBase64)
-                            })
-                        })
-                        add(buildJsonObject {
-                            // ПРОСИМ ЧИСТЫЙ ТЕКСТ ДЛЯ МГНОВЕННОГО СТРИМИНГА
-                            put("text", "You are a real-time translator. Listen to the audio and output EXACTLY in this format:\nORIGINAL: <transcription>\nTRANSLATION: <translation>\nDo not add any other text.")
-                        })
-                    })
+                    put("parts", buildJsonArray { add(buildJsonObject { put("text", dataText) }) })
                 })
             })
             put("generationConfig", buildJsonObject {
-                put("temperature", 0.0)
-                put("topP", 0.95)
-                put("maxOutputTokens", 256)
-                // ВАЖНО: Мы УБРАЛИ responseMimeType = application/json. 
-                // Именно он блокировал стриминг и вызывал задержку 8 секунд!
+                put("temperature", 0.0)      // Нам нужен 100% сухой робот-редактор, никаких стихов!
+                put("responseMimeType", "application/json") // Gemini вышлет сразу идеальный спарсенный JSON словарь 
             })
         }
 
         val request = Request.Builder()
-            .url("$ENDPOINT?key=$apiKey&alt=sse")
+            .url("$ENDPOINT?key=$apiKey")
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
-        var fullResponseText = ""
-        var finalOriginal = ""
-        var finalTranslation = ""
-        var firstTokenTime = 0L
-        val startedAt = System.currentTimeMillis()
+        return@withContext try {
+            val responseText = httpClient.newCall(request).execute().body?.string() 
+                ?: throw IllegalStateException("Empty Server body")
 
-        try {
-            httpClient.newCall(request).execute().use { resp ->
-                if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
-                
-                val source = resp.body?.source() ?: throw IllegalStateException("Empty body")
-                
-                while (!source.exhausted()) {
-                    val line = source.readUtf8Line() ?: break
-                    if (line.startsWith("data: ")) {
-                        val data = line.substring(6)
-                        if (data == "[DONE]") break
-                        
-                        val chunkText = extractTextFromChunk(data)
-                        if (chunkText.isNotEmpty()) {
-                            if (firstTokenTime == 0L) {
-                                firstTokenTime = System.currentTimeMillis() - startedAt
-                                logger.d("GeminiTranslate: ⚡ FIRST TOKEN in ${firstTokenTime}ms")
-                            }
-                            
-                            fullResponseText += chunkText
-                            
-                            // Парсим текст регулярками на лету (очень быстро)
-                            val origMatch = "ORIGINAL:\\s*(.*?)(?:\\nTRANSLATION:|$)".toRegex(RegexOption.DOT_MATCHES_ALL).find(fullResponseText)
-                            val transMatch = "TRANSLATION:\\s*(.*)".toRegex(RegexOption.DOT_MATCHES_ALL).find(fullResponseText)
-                            
-                            finalOriginal = origMatch?.groupValues?.get(1)?.trim() ?: ""
-                            finalTranslation = transMatch?.groupValues?.get(1)?.trim() ?: ""
-                            
-                            onPartialResult(TranslationResult(finalOriginal, finalTranslation))
-                        }
-                    }
-                }
-            }
+            // Извлекаем ответ. Для формата 3.1: json -> candidates -> [0] -> content -> parts -> [0] -> text
+            val rootObj = json.parseToJsonElement(responseText).jsonObject
+            val candidatesObj = rootObj["candidates"]?.jsonArray?.get(0)?.jsonObject
+            val candidateText = candidatesObj?.get("content")?.jsonObject?.get("parts")
+                ?.jsonArray?.get(0)?.jsonObject?.get("text")?.jsonPrimitive?.content ?: ""
+
+            // Напрямую читаем "очищенный" JSON, созданный Gemini Flash
+            val parsedRefinement = json.parseToJsonElement(candidateText).jsonObject
+            
+            // Запасная магия, если Gemini назвал ключи по своему 
+            val refRu = (parsedRefinement.values.firstOrNull()?.jsonPrimitive?.content) ?: voskRawOriginal
+            val refDe = (parsedRefinement.values.drop(1).firstOrNull()?.jsonPrimitive?.content) ?: liveTranslationRaw
+            
+            logger.d("Refinement Check ✓ (${System.currentTimeMillis() - requestStartTime}ms): '$refRu' & '$refDe'")
+
+            TranslationResult(original = refRu, translation = refDe)
+            
         } catch (e: Exception) {
-            logger.e("GeminiTranslate ✗ failed: ${e.message}")
+            logger.e("GeminiTranslate Refiner ✗ fallback ($requestStartTime): ${e.message}")
+            // Fallback до драфтов без обрушения - Галочки станут Зелеными из имеющегося 
+            TranslationResult(original = voskRawOriginal.ifEmpty { socketInputTranscript }, translation = liveTranslationRaw)
         }
-
-        logger.d("GeminiTranslate ← Stream finished in ${System.currentTimeMillis() - startedAt}ms")
-        return@withContext TranslationResult(finalOriginal, finalTranslation)
     }
-
-    private fun extractTextFromChunk(chunkJson: String): String {
-        return runCatching {
-            val root = json.parseToJsonElement(chunkJson).jsonObject
-            val candidates = root["candidates"]?.jsonArray ?: return@runCatching ""
-            if (candidates.isEmpty()) return@runCatching ""
-            val parts = candidates[0].jsonObject["content"]?.jsonObject?.get("parts")?.jsonArray ?: return@runCatching ""
-            buildString {
-                for (part in parts) {
-                    val txt = part.jsonObject["text"]?.jsonPrimitive?.contentOrNull
-                    if (!txt.isNullOrEmpty()) append(txt)
-                }
-            }
-        }.getOrDefault("")
-    }
-
-    private fun pcmToWav(pcmBytes: ByteArray, sampleRate: Int): ByteArray {
-        val out = ByteArrayOutputStream(44 + pcmBytes.size)
-        val totalDataLen = pcmBytes.size + 36
-        val byteRate = sampleRate * 2
-        out.write("RIFF".toByteArray()); out.write(intToLeBytes(totalDataLen)); out.write("WAVE".toByteArray())
-        out.write("fmt ".toByteArray()); out.write(intToLeBytes(16)); out.write(shortToLeBytes(1)); out.write(shortToLeBytes(1))
-        out.write(intToLeBytes(sampleRate)); out.write(intToLeBytes(byteRate)); out.write(shortToLeBytes(2)); out.write(shortToLeBytes(16))
-        out.write("data".toByteArray()); out.write(intToLeBytes(pcmBytes.size)); out.write(pcmBytes)
-        return out.toByteArray()
-    }
-    private fun intToLeBytes(v: Int) = byteArrayOf((v and 0xff).toByte(), ((v ushr 8) and 0xff).toByte(), ((v ushr 16) and 0xff).toByte(), ((v ushr 24) and 0xff).toByte())
-    private fun shortToLeBytes(v: Int) = byteArrayOf((v and 0xff).toByte(), ((v ushr 8) and 0xff).toByte())
 }
 
 data class TranslationResult(
