@@ -1098,6 +1098,11 @@ class LearnCoreViewModel @Inject constructor(
         _state.update { it.copy(connectionStatus = LearnConnectionStatus.Ready) }
         sessionReadyAtMs = System.currentTimeMillis()
         val session = activeSession ?: return
+
+        // Translator: прогреваем REST-соединение пока пользователь молчит — экономим ~400мс на первом переводе.
+        if (session.id == "translator" && activeApiKey.isNotEmpty()) {
+            viewModelScope.launch { translationClient.warmUp(activeApiKey) }
+        }
         contextSeeded = true
         modelStartedSpeakingThisTurn = false
 
