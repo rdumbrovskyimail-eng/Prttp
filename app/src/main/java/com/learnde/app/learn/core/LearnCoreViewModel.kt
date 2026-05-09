@@ -127,6 +127,7 @@ class LearnCoreViewModel @Inject constructor(
     @Volatile private var sessionReadyAtMs: Long = 0L
     @Volatile private var hasModelOutputThisTurn: Boolean = false
     @Volatile private var translatorForceMicOpenUntilMs: Long = 0L
+    @Volatile private var restTranslationTriggeredThisTurn = false
 
     // ════════════════════════════════════════════════════════════
     //  Translator: формирование пар (Vosk → state.translatorPairs)
@@ -899,6 +900,7 @@ class LearnCoreViewModel @Inject constructor(
         lastModelActivityAtMs = 0L
         sessionReadyAtMs = 0L
         hasModelOutputThisTurn = false
+        restTranslationTriggeredThisTurn = false
         lastSilencePromptAtMs = 0L
         droppedMicChunks = 0
         setupJob?.cancel()
@@ -1168,6 +1170,10 @@ class LearnCoreViewModel @Inject constructor(
                     is GeminiEvent.SetupComplete -> handleSetupComplete()
 
                     is GeminiEvent.AudioChunk -> {
+                        if (activeSession?.id == "translator" && !restTranslationTriggeredThisTurn) {
+                            restTranslationTriggeredThisTurn = true
+                            triggerRestTranslation()
+                        }
                         val now = System.currentTimeMillis()
                         lastAiAudioChunkAtMs = now
                         lastModelActivityAtMs = now
@@ -1265,6 +1271,11 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.InputTranscript -> {
+                        // РАННИЙ ТРИГГЕР: Модель распознала речь, значит мы закончили говорить!
+                        if (activeSession?.id == "translator" && !restTranslationTriggeredThisTurn) {
+                            restTranslationTriggeredThisTurn = true
+                            triggerRestTranslation()
+                        }
                         // Для translator транскрипция отключена и не нужна
                         if (activeSession?.id != "translator") {
                             transcriptChannel.trySend(TranscriptOp.UserDelta(event.text))
@@ -1288,6 +1299,10 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.ModelText -> {
+                        if (activeSession?.id == "translator" && !restTranslationTriggeredThisTurn) {
+                            restTranslationTriggeredThisTurn = true
+                            triggerRestTranslation()
+                        }
                         if (activeSession?.id == "translator") return@collect
                         if (awaitingInitialGreeting) {
                             awaitingInitialGreeting = false
