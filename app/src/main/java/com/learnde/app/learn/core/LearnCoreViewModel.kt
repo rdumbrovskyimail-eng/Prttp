@@ -109,6 +109,7 @@ class LearnCoreViewModel @Inject constructor(
     private var greetingFallbackJob: Job? = null
     private var setupJob: Job? = null
     private var finishGraceJob: Job? = null
+    private var translateJob: Job? = null
 
     private var stuckTurnWatchdogJob: Job? = null
     private var textWithoutAudioJob: Job? = null
@@ -128,17 +129,11 @@ class LearnCoreViewModel @Inject constructor(
     @Volatile private var restTranslationTriggeredThisTurn = false
 
     // ════════════════════════════════════════════════════════════
-    //  Translator: Optimistic UI & Validation (Vosk + Gemini API)
+    //  Translator: Optimistic UI & Validation (Gemini API)
     // ════════════════════════════════════════════════════════════
 
     @Volatile private var nextPairId: Long = 1L
     @Volatile private var currentOpenPairId: Long? = null
-    @Volatile private var currentPairOriginalFinalized: Boolean = false
-    @Volatile private var currentPairTranslationFinalized: Boolean = false
-
-    // STT Gemini Buffer: Память транскрипта Живого Сокета (прячем, чтоб показать API потом)
-    @Volatile private var lastLiveInputTranscriptSnapshot = ""
-    @Volatile private var refinementTranslateJob: Job? = null
 
     private val transcriptMutex = Mutex()
     @Volatile private var transcriptBuffer: List<ConversationMessage> = emptyList()
@@ -403,78 +398,40 @@ class LearnCoreViewModel @Inject constructor(
         textWithoutAudioJob = null
     }
 
-    /**
-     * Стартует подписку на Vosk events и формирует TranslationPair'ы в state.
-     *
-     * Логика создания пар:
-     *  • MIC partial:
-     *      - если текущая пара "закрыта" (в ней есть и MIC final и PLAYBACK final) → создаём новую
-     *      - если текущая пара открыта → обновляем originalText
-     *  • MIC final:
-     *      - дописываем в текущую пару, помечаем originalIsFinal=true
-     *  • PLAYBACK partial / final → аналогично, но в translation*
-     */
-    private fun observeVoskEvents() {
-        viewModelScope.launch {
-            voskTranscriber.events.collect { event ->
-                if (activeSession?.id != "translator") return@collect
-                when (event) {
-                    is com.learnde.app.data.vosk.VoskEvent.Partial -> handleVoskPartial(event)
-                    is com.learnde.app.data.vosk.VoskEvent.Final -> handleVoskFinal(event)
-                }
-            }
-        }
-    }
-
-    private fun handleVoskPartial(event: com.learnde.app.data.vosk.VoskEvent.Partial) {
-        if (event.text.isBlank()) return
-        when (event.source) {
-            com.learnde.app.data.vosk.VoskSource.MIC -> {
-                val pairId = ensureOpenPairForMic()
-                updatePair(pairId) { pair ->
-                    pair.copy(
-                        originalText = event.text,
-                        originalIsFinal = false,
-                        originalIsRefined = false,
-                        originalLang = "Определяю..."
-                    )
-                }
-            }
-            com.learnde.app.data.vosk.VoskSource.PLAYBACK -> return // ОТКЛЮЧЕНО НА ПЛЕЙБЕК (Берем из Socket ModelText)
-        }
-    }
-
-    private fun handleVoskFinal(event: com.learnde.app.data.vosk.VoskEvent.Final) {
-        when (event.source) {
-            com.learnde.app.data.vosk.VoskSource.MIC -> {
-                val pairId = ensureOpenPairForMic()
-                updatePair(pairId) { pair ->
-                    pair.copy(
-                        originalText = event.text,
-                        originalIsFinal = true, // Включаем серую Галочку (Пользовательская половина закрыта)
-                        originalIsRefined = false 
-                    )
-                }
-                currentPairOriginalFinalized = true
-            }
-            com.learnde.app.data.vosk.VoskSource.PLAYBACK -> return
-        }
-    }
-
-    private fun ensureOpenPairForMic(): Long {
-        val openId = currentOpenPairId
-        if (openId != null && !(currentPairOriginalFinalized && currentPairTranslationFinalized)) return openId
-        return openNewPair()
-    }
-
     private fun openNewPair(): Long {
         val id = nextPairId++
         currentOpenPairId = id
-        currentPairOriginalFinalized = false
-        currentPairTranslationFinalized = false
-        lastLiveInputTranscriptSnapshot = "" // Очищаем кеш предыдущего STT 
         _state.update { st -> st.copy(translatorPairs = st.translatorPairs + com.learnde.app.learn.core.TranslationPair(id = id)) }
         return id
+    }
+
+    private fun triggerReverseTranslation(pairId: Long, modelVoiceText: String) {
+        if (modelVoiceText.isBlank() || activeApiKey.isEmpty()) return
+        
+        translateJob?.cancel()
+        translateJob = viewModelScope.launch {
+            runCatching {
+                // Молниеносный микро-перевод "в обратную сторону" для 1-й колонки!
+                translationClient.reverseTranslate(modelVoiceText, activeApiKey)
+            }.onSuccess { res ->
+                 // Высвечиваем зеленые ✓✓ 
+                 updatePair(pairId) { pair ->
+                     pair.copy(
+                         originalText = res.reconstructedText,
+                         originalLang = res.lang,
+                         translationLang = if(res.lang == "RU") "DE" else "RU",
+                         originalIsRefined = true,
+                         translationIsRefined = true 
+                     )
+                 }
+            }.onFailure { logger.w("API Reverse failed!") }
+        }
+    }
+    
+    private fun resetTranslatorPairs() {
+        currentOpenPairId = null
+        translateJob?.cancel()
+        _state.update { it.copy(translatorPairs = emptyList()) }
     }
 
     private fun updatePair(id: Long, transform: (com.learnde.app.learn.core.TranslationPair) -> com.learnde.app.learn.core.TranslationPair) {
@@ -486,60 +443,6 @@ class LearnCoreViewModel @Inject constructor(
             st.copy(translatorPairs = newList)
         }
     }
-
-    private fun resetTranslatorPairs() {
-        currentOpenPairId = null
-        currentPairOriginalFinalized = false
-        currentPairTranslationFinalized = false
-        lastLiveInputTranscriptSnapshot = ""
-        _state.update { it.copy(translatorPairs = emptyList()) }
-    }
-
-    private fun triggerRestRefinementCheck(targetPairId: Long) {
-        val snapshotPair = _state.value.translatorPairs.find { it.id == targetPairId } ?: return
-        
-        // Добыли тексты из текущих драфтов фазы (Прямо из оперативки!)
-        val localVosk = snapshotPair.originalText
-        val liveGermanVoice = snapshotPair.translationText
-        val alternativeLiveHumanASR = lastLiveInputTranscriptSnapshot
-        val currentKey = activeApiKey
-        
-        if (localVosk.isBlank() && liveGermanVoice.isBlank()) return
-        if (currentKey.isEmpty()) return
-
-        refinementTranslateJob?.cancel() // Забираем предыдущие перехваты 
-        
-        refinementTranslateJob = viewModelScope.launch {
-            val beginTs = System.currentTimeMillis()
-            runCatching {
-                // Моментальная Флеш модель-арбитр. Передаем тексты: 
-                translationClient.refine(
-                    voskRawOriginal = localVosk, 
-                    socketInputTranscript = alternativeLiveHumanASR,
-                    liveTranslationRaw = liveGermanVoice,
-                    apiKey = currentKey
-                )
-            }.onSuccess { refinedRes ->
-                val took = System.currentTimeMillis() - beginTs
-                logger.d("REST Refinement Completed. \u2705 Took $took ms.")
-                
-                // РИСУЕМ ЗЕЛЕНЫЕ ГАЛОЧКИ ВОСШЕДШИЕ В UI С ОТКОРРЕКТИРОВАННЫМ ТЕКСТОМ:
-                updatePair(targetPairId) { pair ->
-                    pair.copy(
-                        originalText = refinedRes.original,
-                        translationText = refinedRes.translation,
-                        originalLang = detectLangSimple(refinedRes.original), 
-                        translationLang = detectLangSimple(refinedRes.translation), 
-                        originalIsRefined = true,     // Зеленая ✓✓
-                        translationIsRefined = true   // Зеленая ✓✓ 
-                    )
-                }
-            }.onFailure {
-                logger.w("REST Refinement failed! Kept Draft Gray Checks ✓. Err: ${it.message}")
-            }
-        }
-    }
-
     private fun detectLangSimple(text: String): String {
         if (text.isBlank()) return ""
         val hasCyrillic = text.any { it in 'а'..'я' || it in 'А'..'Я' || it == 'ё' || it == 'Ё' }
@@ -778,8 +681,6 @@ class LearnCoreViewModel @Inject constructor(
 
         translateJob?.cancel()
         translateJob = null
-        synchronized(phraseAudioBuffer) { phraseAudioBuffer.reset() }
-        // voskTranscriber.stop()  // выключено
         runCatching { liveClient.disconnect() }
         runCatching { session?.onExit() }
 
@@ -898,13 +799,9 @@ class LearnCoreViewModel @Inject constructor(
         // Translator работает на одном audio-клиенте с input/output audio transcription.
         // Параллельный text-клиент отключён — он добавлял латентность из-за общего rate-pool.
 
-        // Translator: ресет пар. Vosk временно отключён — текст приходит
-        // из Gemini REST по TurnComplete (см. observeGeminiEvents).
+        // Translator: ресет пар.
         if (session.id == "translator") {
             resetTranslatorPairs()
-            synchronized(phraseAudioBuffer) { phraseAudioBuffer.reset() }
-            translateJob?.cancel()
-            translateJob = null
         }
 
         logger.d("◀ Learn.startInternal — awaiting SetupComplete")
@@ -981,17 +878,7 @@ class LearnCoreViewModel @Inject constructor(
                     if (!aiActuallyAudible) {
                         liveClient.sendAudio(chunk)
 
-                        // Translator: копим PCM в буфер фразы для последующей отправки
-                        // в Gemini REST. Если буфер раздулся выше лимита — сбрасываем
-                        // старое (значит между фразами накопилась тишина).
-                        if (isTranslator) {
-                            synchronized(phraseAudioBuffer) {
-                                if (phraseAudioBuffer.size() > MAX_PHRASE_BUFFER_BYTES) {
-                                    phraseAudioBuffer.reset()
-                                }
-                                phraseAudioBuffer.write(chunk)
-                            }
-                        }
+
 
                         if (droppedMicChunks > 0) {
                             logger.d("Mic: gate opened, dropped $droppedMicChunks chunks during AI tail")
@@ -1106,14 +993,6 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.TurnComplete -> {
-                        // ТРАНСЛЭЙТОР ФАЗА 2: Отключаем галочку '...' в статику Серого цвета и шлем на текст проверку
-                        if (activeSession?.id == "translator" && currentOpenPairId != null) {
-                            val finalizePairId = currentOpenPairId!!
-                            updatePair(finalizePairId) { it.copy(translationIsFinal = true, originalIsFinal = true) }
-                            currentPairTranslationFinalized = true
-                            
-                            triggerRestRefinementCheck(finalizePairId) // 🚀 Async Arbiter Trigger
-                        }
 
                         // Дефолтная очистка для обычного чата и Восков
                         transcriptChannel.trySend(TranscriptOp.UserTurnComplete)
@@ -1166,12 +1045,7 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.InputTranscript -> {
-                        // Для Транслейтора кладем сокетную STT про запас! Мы отправим ее Арбитру для корректировок пунктуации и сверки
-                        if (activeSession?.id == "translator") {
-                             lastLiveInputTranscriptSnapshot = event.text
-                        } else {
-                            transcriptChannel.trySend(TranscriptOp.UserDelta(event.text))
-                        }
+                        transcriptChannel.trySend(TranscriptOp.UserDelta(event.text))
                     }
 
                     is GeminiEvent.OutputTranscript -> {
@@ -1193,7 +1067,7 @@ class LearnCoreViewModel @Inject constructor(
                     is GeminiEvent.ModelText -> {
                         // СИНХРОННЫЙ LIVE ТЕКСТ! (Летит одновременно с голосом 50 мс задержки)
                         if (activeSession?.id == "translator") {
-                            val pairId = currentOpenPairId ?: return@collect
+                            val pairId = currentOpenPairId ?: openNewPair()
 
                             updatePair(pairId) { pair ->
                                 pair.copy(
