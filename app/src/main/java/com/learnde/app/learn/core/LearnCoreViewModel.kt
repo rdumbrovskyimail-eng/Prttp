@@ -579,7 +579,18 @@ class LearnCoreViewModel @Inject constructor(
         translateJob = viewModelScope.launch {
             val startedAt = System.currentTimeMillis()
             runCatching {
-                translationClient.translate(audioBytes, activeApiKey)
+                translationClient.translate(audioBytes, activeApiKey) { partial ->
+                    updatePair(pairId) { pair ->
+                        pair.copy(
+                            originalText = partial.original,
+                            translationText = partial.translation,
+                            originalIsFinal = false,
+                            translationIsFinal = false,
+                            originalLang = detectLangSimple(partial.original),
+                            translationLang = detectLangSimple(partial.translation),
+                        )
+                    }
+                }
             }.onSuccess { result ->
                 val elapsed = System.currentTimeMillis() - startedAt
                 logger.d("REST translate ✓ ${elapsed}ms: '${result.original}' → '${result.translation}'")
