@@ -969,15 +969,28 @@ class LearnCoreViewModel @Inject constructor(
                             awaitingInitialGreeting = false
                             greetingFallbackJob?.cancel()
                         }
-                        // Для translator OutputTranscript игнорируем —
-                        // record_translation function call даёт точный перевод.
-                        if (activeSession?.id != "translator") {
-                            if (lastAiAudioChunkAtMs == 0L
-                                || (System.currentTimeMillis() - lastAiAudioChunkAtMs) > 500) {
-                                startTextWithoutAudioWatchdog()
+
+                        if (activeSession?.id == "translator") {
+                            // Translator: outputTranscription = ASR того что Gemini сказала голосом.
+                            // Сразу льём в правую колонку (translationText) — это финальный текст перевода.
+                            val pairId = currentOpenPairId ?: openNewPair()
+                            updatePair(pairId) { pair ->
+                                pair.copy(
+                                    translationText = pair.translationText + event.text,
+                                    translationLang = detectLangSimple(pair.translationText + event.text),
+                                )
                             }
-                            transcriptChannel.trySend(TranscriptOp.ModelDelta(event.text, "OutputTranscript"))
+                            lastModelActivityAtMs = System.currentTimeMillis()
+                            hasModelOutputThisTurn = true
+                            startStuckTurnWatchdog()
+                            return@collect
                         }
+
+                        if (lastAiAudioChunkAtMs == 0L
+                            || (System.currentTimeMillis() - lastAiAudioChunkAtMs) > 500) {
+                            startTextWithoutAudioWatchdog()
+                        }
+                        transcriptChannel.trySend(TranscriptOp.ModelDelta(event.text, "OutputTranscript"))
                     }
 
                     is GeminiEvent.ModelText -> {
