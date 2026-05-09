@@ -78,6 +78,11 @@ class LearnCoreViewModel @Inject constructor(
         private const val TEXT_WITHOUT_AUDIO_TIMEOUT_MS = 1_500L
         private const val SILENCE_PROMPT_COOLDOWN_MS = 30_000L
         private const val FINISH_SESSION_GRACE_MS = 5_000L
+
+        // Translator: максимальный размер буфера PCM фразы.
+        // 6 сек × 16000 Hz × 2 байта = 192000 байт. Защищает от раздувания
+        // буфера фоновой тишиной между фразами.
+        private const val MAX_PHRASE_BUFFER_BYTES = 192_000
     }
 
     private val _state = MutableStateFlow(LearnCoreState())
@@ -580,8 +585,14 @@ class LearnCoreViewModel @Inject constructor(
                 logger.d("REST translate ✓ ${elapsed}ms: '${result.original}' → '${result.translation}'")
 
                 // Игнорируем пустые ответы (модель решила что это шум)
-                if (result.original.isBlank() && result.translation.isBlank()) {
-                    // Удаляем пустую пару
+                val origTrim = result.original.trim()
+                val transTrim = result.translation.trim()
+                val isEmpty = origTrim.isBlank() && transTrim.isBlank()
+                val isPlaceholder = origTrim.equals("silence", true) ||
+                    origTrim.equals("noise", true) ||
+                    origTrim.startsWith("[")
+                if (isEmpty || isPlaceholder) {
+                    logger.d("REST translate: discarding noise/empty result")
                     _state.update { st ->
                         st.copy(translatorPairs = st.translatorPairs.filterNot { it.id == pairId })
                     }
@@ -1057,10 +1068,16 @@ class LearnCoreViewModel @Inject constructor(
                     if (!aiActuallyAudible) {
                         liveClient.sendAudio(chunk)
 
-                        // Параллельно копим PCM в буфер фразы — нужно для отправки
-                        // в Gemini REST на TurnComplete.
+                        // Translator: копим PCM в буфер фразы для последующей отправки
+                        // в Gemini REST. Если буфер раздулся выше лимита — сбрасываем
+                        // старое (значит между фразами накопилась тишина).
                         if (isTranslator) {
-                            phraseAudioBuffer.write(chunk)
+                            synchronized(phraseAudioBuffer) {
+                                if (phraseAudioBuffer.size() > MAX_PHRASE_BUFFER_BYTES) {
+                                    phraseAudioBuffer.reset()
+                                }
+                                phraseAudioBuffer.write(chunk)
+                            }
                         }
 
                         if (droppedMicChunks > 0) {
