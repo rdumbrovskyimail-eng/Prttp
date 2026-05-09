@@ -910,7 +910,7 @@ class LearnCoreViewModel @Inject constructor(
                             currentOpenPairId = null // Перезаряжаем под следующую фразу пользователя!
                         }
 
-                        // Дефолтная очистка для обычного чата и Восков
+                        // Дефолтная очистка для обычного чата
                         transcriptChannel.trySend(TranscriptOp.UserTurnComplete)
                         transcriptChannel.trySend(TranscriptOp.ModelTurnComplete)
                         
