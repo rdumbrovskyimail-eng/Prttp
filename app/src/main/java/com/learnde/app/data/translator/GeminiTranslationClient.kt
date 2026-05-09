@@ -33,13 +33,20 @@ class GeminiTranslationClient @Inject constructor(
 
     // Жесткие короткие таймауты: модель-лайт отвечает за миллисекунды!
     // Настраиваем ConnectionPool для повторного использования соединений (убирает 100-200мс на TLS-handshake)
+    private val sharedPool = okhttp3.ConnectionPool(8, 5, TimeUnit.MINUTES)
+
     private val httpClient = OkHttpClient.Builder()
         .callTimeout(10, TimeUnit.SECONDS)
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS)
         .writeTimeout(3, TimeUnit.SECONDS)
-        .connectionPool(okhttp3.ConnectionPool(8, 5, TimeUnit.MINUTES))
+        .connectionPool(sharedPool)
         .retryOnConnectionFailure(true)
+        .build()
+
+    private val warmupClient = OkHttpClient.Builder()
+        .callTimeout(15, TimeUnit.SECONDS)
+        .connectionPool(sharedPool)
         .build()
 
     suspend fun reverseTranslate(textFromSocket: String, apiKey: String): ReverseResult = withContext(Dispatchers.IO) {
@@ -98,11 +105,12 @@ class GeminiTranslationClient @Inject constructor(
 
     suspend fun warmUp(apiKey: String) = withContext(Dispatchers.IO) {
         if (apiKey.isEmpty()) return@withContext
+        val t0 = System.currentTimeMillis()
         runCatching {
             val body = buildJsonObject {
                 put("contents", buildJsonArray {
                     add(buildJsonObject {
-                        put("parts", buildJsonArray { add(buildJsonObject { put("text", "ok") }) })
+                        put("parts", buildJsonArray { add(buildJsonObject { put("text", "hi") }) })
                     })
                 })
                 put("generationConfig", buildJsonObject {
@@ -112,9 +120,9 @@ class GeminiTranslationClient @Inject constructor(
             }
             val request = Request.Builder().url("$ENDPOINT?key=$apiKey")
                 .post(body.toString().toRequestBody("application/json".toMediaType())).build()
-            httpClient.newCall(request).execute().close()
-            logger.d("REST warmup ✓")
-        }.onFailure { logger.d("REST warmup skipped: ${it.message}") }
+            warmupClient.newCall(request).execute().use { it.body?.string() }
+            logger.d("REST warmup ✓ (${System.currentTimeMillis() - t0}ms)")
+        }.onFailure { logger.w("REST warmup failed (${System.currentTimeMillis() - t0}ms): ${it.message}") }
     }
 }
 
