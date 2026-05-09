@@ -10,9 +10,9 @@ enum class LearnConnectionStatus {
 /**
  * Пара "оригинал + перевод" — одна строка чата translator-сессии.
  * Заполняется через 3 источника:
- *   • Vosk partial → текст в *Text, *IsFinal=false → светло-серый цвет
- *   • Vosk final   → текст в *Text, *IsFinal=true  → серый цвет
- *   • Gemini REST  → текст в *Text, *IsRefined=true → чёрный цвет
+ *   • Gemini Live ASR → оригинальный текст драфтом, IsFinal=false (серые точки)
+ *   • Gemini Live Model → перевод по слогам, IsFinal=false
+ *   • Gemini REST Reverse → идеальный оригинал + перевод, IsRefined=true (зеленые галочки)
  */
 data class TranslationPair(
     val id: Long,
@@ -38,7 +38,7 @@ data class LearnCoreState(
     val liveUserTranscript: String = "",
     val isPreparingSession: Boolean = false,
     val isFinishingSession: Boolean = false,
-    // Translator: пары для UI (заполняются Vosk + Gemini REST)
+    // Translator: пары для UI (заполняются Gemini Live + Gemini REST)
     val translatorPairs: List<TranslationPair> = emptyList(),
     // Старые поля (не используются в новом UI — оставлены для совместимости со старым кодом)
     val translatorOriginal: String = "",
