@@ -462,79 +462,6 @@ class LearnCoreViewModel @Inject constructor(
         }
     }
 
-    private fun observeTranslatorFunctionTranscripts() {
-        viewModelScope.launch {
-            translatorSession.functionTranscripts.collect { pair ->
-                if (activeSession?.id != "translator") return@collect
-
-                logger.d("Translator FN-transcript: [${pair.sourceLang}] '${pair.original}' → '${pair.translation}'")
-
-                // ВАЖНО: все мутации делаем АТОМАРНО под одним withLock,
-                // иначе race condition: между удалением live-bubble и сбросом
-                // liveModelMessageTs = 0L успевает прилететь поздняя дельта,
-                // и upsertLiveModelBubble создаст новый "хвостовой" пузырь.
-                transcriptMutex.withLock {
-                    // 1. Удаляем live-bubble модели (он мог быть создан outputTranscription'ом)
-                    val filtered = if (liveModelMessageTs != 0L) {
-                        transcriptBuffer.filterNot { it.timestamp == liveModelMessageTs }
-                    } else {
-                        transcriptBuffer
-                    }
-
-                    // 2. Добавляем точную пару USER + MODEL
-                    val now = System.currentTimeMillis()
-                    val userMsg = ConversationMessage(
-                        role = ConversationMessage.ROLE_USER,
-                        text = pair.original,
-                        timestamp = now,
-                    )
-                    val modelMsg = ConversationMessage(
-                        role = ConversationMessage.ROLE_MODEL,
-                        text = pair.translation,
-                        timestamp = now + 1,
-                    )
-                    val next = (filtered + userMsg + modelMsg).takeLast(MAX_TRANSCRIPT_SIZE)
-                    transcriptBuffer = next
-
-                    // 3. Сбрасываем буферы дельт ВНУТРИ withLock — атомарно с обновлением transcript.
-                    //    Это гарантирует что новый upsertLiveModelBubble увидит корректное состояние:
-                    //    либо liveModelMessageTs = 0L (старый bubble уже удалён),
-                    //    либо ещё старый ts (но тогда он находится в buffer и обновится корректно).
-                    liveModelMessageTs = 0L
-                    userTurnBuffer.clear()
-                    modelTurnBuffer.clear()
-
-                    // 4. Помечаем turn как завершённый функцией —
-                    //    приходящие позже OutputTranscript-дельты должны игнорироваться,
-                    //    иначе они создадут "хвостовой" пузырь типа "essen." или "ist.".
-                    translatorFunctionFinalizedThisTurn = true
-
-                    _state.update {
-                        it.copy(transcript = next, liveUserTranscript = "")
-                    }
-                }
-
-                // Для translator: после функции явно завершаем turn локально и отправляем
-                // ToolResponse → сервер закончит генерацию и будет готов к следующей фразе.
-                // Без этого сервер "залипает" в режиме генерации, и модель не реагирует
-                // на новую речь пользователя в течение десятков секунд.
-                kotlinx.coroutines.delay(50) // даём ToolResponse уйти на сервер первым
-                runCatching { audioEngine.onTurnComplete() }
-                _state.update { it.copy(isAiSpeaking = false) }
-                modelStartedSpeakingThisTurn = false
-                hasModelOutputThisTurn = false
-                translatorFunctionFinalizedThisTurn = false
-                cancelStuckTurnWatchdog()
-                cancelTextWithoutAudioWatchdog()
-                lastAiAudioChunkAtMs = 0L
-                // Принудительно держим микрофон открытым 1500мс после функции —
-                // пользователь должен иметь возможность сразу говорить следующую фразу
-                // даже если модель ещё доигрывает остаток своего аудио.
-                translatorForceMicOpenUntilMs = System.currentTimeMillis() + 1_500L
-            }
-        }
-    }
-
     fun onIntent(intent: LearnCoreIntent) {
         when (intent) {
             is LearnCoreIntent.Start     -> handleStart(intent.sessionId)
@@ -602,7 +529,8 @@ class LearnCoreViewModel @Inject constructor(
         val finalTopP = if (isTranslator) 0.95f else cachedSettings.topP  // меньше отсебятины
         val finalTopK = if (isTranslator) 0 else cachedSettings.topK
 
-        val inputTranscr = if (isTranslator) false else true
+        // Включаем Input Transcription для Транслейтора, чтобы видеть живой драфт ASR пользователя
+        val inputTranscr = true 
         val outputTranscr = if (isTranslator) false else true
         val transcriptionLanguageCodes = if (isTranslator) listOf("ru-RU", "de-DE") else emptyList()
 
