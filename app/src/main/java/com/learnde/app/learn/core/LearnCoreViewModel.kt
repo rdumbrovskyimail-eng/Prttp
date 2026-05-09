@@ -1154,10 +1154,6 @@ class LearnCoreViewModel @Inject constructor(
                     is GeminiEvent.SetupComplete -> handleSetupComplete()
 
                     is GeminiEvent.AudioChunk -> {
-                        if (activeSession?.id == "translator" && !restTranslationTriggeredThisTurn) {
-                            restTranslationTriggeredThisTurn = true
-                            triggerRestTranslation()
-                        }
                         val now = System.currentTimeMillis()
                         lastAiAudioChunkAtMs = now
                         lastModelActivityAtMs = now
@@ -1194,7 +1190,10 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.TurnComplete -> {
-                        restTranslationTriggeredThisTurn = false
+                        if (activeSession?.id == "translator" && currentOpenPairId != null) {
+                            updatePair(currentOpenPairId!!) { it.copy(translationIsFinal = true) }
+                            currentPairTranslationFinalized = true
+                        }
 
                         // Для translator: если record_translation уже сработал —
                         // observeTranslatorFunctionTranscripts уже добавил финальную пару.
@@ -1250,11 +1249,6 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.InputTranscript -> {
-                        // РАННИЙ ТРИГГЕР: Модель распознала речь, значит мы закончили говорить!
-                        if (activeSession?.id == "translator" && !restTranslationTriggeredThisTurn) {
-                            restTranslationTriggeredThisTurn = true
-                            triggerRestTranslation()
-                        }
                         // Для translator транскрипция отключена и не нужна
                         if (activeSession?.id != "translator") {
                             transcriptChannel.trySend(TranscriptOp.UserDelta(event.text))
@@ -1278,11 +1272,25 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.ModelText -> {
-                        if (activeSession?.id == "translator" && !restTranslationTriggeredThisTurn) {
-                            restTranslationTriggeredThisTurn = true
-                            triggerRestTranslation()
+                        // --- 1. ТРАНСЛЯЦИЯ В КАРТОЧКУ UI мгновенно (50мс) ---
+                        if (activeSession?.id == "translator") {
+                            val pairId = currentOpenPairId ?: return@collect
+
+                            updatePair(pairId) { pair ->
+                                pair.copy(
+                                    translationText = pair.translationText + event.text,
+                                    translationIsFinal = false,
+                                    translationIsRefined = false,
+                                    translationLang = "DE"
+                                )
+                            }
+                            lastModelActivityAtMs = System.currentTimeMillis()
+                            hasModelOutputThisTurn = true
+                            startStuckTurnWatchdog()
+
+                            return@collect
                         }
-                        if (activeSession?.id == "translator") return@collect
+
                         if (awaitingInitialGreeting) {
                             awaitingInitialGreeting = false
                             greetingFallbackJob?.cancel()
@@ -1290,11 +1298,6 @@ class LearnCoreViewModel @Inject constructor(
                         if (lastAiAudioChunkAtMs == 0L
                             || (System.currentTimeMillis() - lastAiAudioChunkAtMs) > 500) {
                             startTextWithoutAudioWatchdog()
-                        }
-                        if (activeSession?.id == "translator") {
-                            lastModelActivityAtMs = System.currentTimeMillis()
-                            hasModelOutputThisTurn = true
-                            startStuckTurnWatchdog()
                         }
                         transcriptChannel.trySend(TranscriptOp.ModelDelta(event.text, "ModelText"))
                     }
