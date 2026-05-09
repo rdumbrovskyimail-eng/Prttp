@@ -178,7 +178,7 @@ class LearnCoreViewModel @Inject constructor(
         observeGeminiEvents()
         observeArbiter()
         observeVocabularyViolations()
-        // observeVoskEvents()  // временно отключено: используем Gemini REST вместо Vosk
+        observeVoskEvents()
         startTranscriptProcessor()
         viewModelScope.launch { audioEngine.initPlayback() }
     }
@@ -439,6 +439,9 @@ class LearnCoreViewModel @Inject constructor(
     }
 
     private fun handleVoskPartial(event: com.learnde.app.data.vosk.VoskEvent.Partial) {
+        if (activeSession?.id != "translator") return
+        if (event.text.isBlank()) return
+
         when (event.source) {
             com.learnde.app.data.vosk.VoskSource.MIC -> {
                 val pairId = ensureOpenPairForMic()
@@ -447,25 +450,16 @@ class LearnCoreViewModel @Inject constructor(
                         originalText = event.text,
                         originalIsFinal = false,
                         originalIsRefined = false,
-                        originalLang = event.lang.tagOrEmpty(),
+                        originalLang = event.lang.tagOrEmpty().ifBlank { "RU" }
                     )
                 }
             }
-            com.learnde.app.data.vosk.VoskSource.PLAYBACK -> {
-                val pairId = ensureOpenPairForPlayback() ?: return
-                updatePair(pairId) { pair ->
-                    pair.copy(
-                        translationText = event.text,
-                        translationIsFinal = false,
-                        translationIsRefined = false,
-                        translationLang = event.lang.tagOrEmpty(),
-                    )
-                }
-            }
+            com.learnde.app.data.vosk.VoskSource.PLAYBACK -> return
         }
     }
 
     private fun handleVoskFinal(event: com.learnde.app.data.vosk.VoskEvent.Final) {
+        if (activeSession?.id != "translator") return
         when (event.source) {
             com.learnde.app.data.vosk.VoskSource.MIC -> {
                 val pairId = ensureOpenPairForMic()
@@ -473,22 +467,12 @@ class LearnCoreViewModel @Inject constructor(
                     pair.copy(
                         originalText = event.text,
                         originalIsFinal = true,
-                        originalLang = event.lang.tagOrEmpty(),
+                        originalIsRefined = false
                     )
                 }
                 currentPairOriginalFinalized = true
             }
-            com.learnde.app.data.vosk.VoskSource.PLAYBACK -> {
-                val pairId = ensureOpenPairForPlayback() ?: return
-                updatePair(pairId) { pair ->
-                    pair.copy(
-                        translationText = event.text,
-                        translationIsFinal = true,
-                        translationLang = event.lang.tagOrEmpty(),
-                    )
-                }
-                currentPairTranslationFinalized = true
-            }
+            com.learnde.app.data.vosk.VoskSource.PLAYBACK -> return
         }
     }
 
