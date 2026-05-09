@@ -74,17 +74,36 @@ Never add quotes, comments, or explanations. Output only the translated sentence
             .post(body.toString().toRequestBody("application/json".toMediaType())).build()
 
         suspend fun executeOnce(): String? = withContext(Dispatchers.IO) {
-            runCatching {
+            try {
                 httpClient.newCall(request).execute().use { resp ->
-                    if (!resp.isSuccessful) return@runCatching null
-                    val responseText = resp.body?.string() ?: return@runCatching null
-                    json.parseToJsonElement(responseText)
-                        .jsonObject["candidates"]?.jsonArray?.firstOrNull()
-                        ?.jsonObject?.get("content")?.jsonObject?.get("parts")
+                    val responseText = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        logger.e("ReverseTr HTTP ${resp.code}: ${responseText.take(400)}")
+                        return@withContext null
+                    }
+                    val parsed = runCatching { json.parseToJsonElement(responseText).jsonObject }
+                        .getOrElse {
+                            logger.e("ReverseTr parse error: ${it.message} | body=${responseText.take(400)}")
+                            return@withContext null
+                        }
+
+                    // finishReason для диагностики
+                    val candidate = parsed["candidates"]?.jsonArray?.firstOrNull()?.jsonObject
+                    val finishReason = candidate?.get("finishReason")?.jsonPrimitive?.content
+                    val text = candidate?.get("content")?.jsonObject?.get("parts")
                         ?.jsonArray?.firstOrNull()?.jsonObject?.get("text")
                         ?.jsonPrimitive?.content?.trim()
+
+                    if (text.isNullOrEmpty()) {
+                        logger.w("ReverseTr empty text, finishReason=$finishReason | body=${responseText.take(400)}")
+                        return@withContext null
+                    }
+                    text
                 }
-            }.getOrNull()
+            } catch (e: Exception) {
+                logger.e("ReverseTr exception: ${e.javaClass.simpleName}: ${e.message}")
+                null
+            }
         }
 
         var resultText = executeOnce()
