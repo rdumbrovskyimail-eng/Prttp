@@ -156,3 +156,8 @@ class GeminiTranslationClient @Inject constructor(
     private fun intToLeBytes(v: Int) = byteArrayOf((v and 0xff).toByte(), ((v ushr 8) and 0xff).toByte(), ((v ushr 16) and 0xff).toByte(), ((v ushr 24) and 0xff).toByte())
     private fun shortToLeBytes(v: Int) = byteArrayOf((v and 0xff).toByte(), ((v ushr 8) and 0xff).toByte())
 }
+
+data class TranslationResult(
+    val original: String,
+    val translation: String,
+)
