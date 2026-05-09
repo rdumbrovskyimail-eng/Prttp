@@ -545,6 +545,82 @@ class LearnCoreViewModel @Inject constructor(
         _state.update { it.copy(translatorPairs = emptyList()) }
     }
 
+    /**
+     * Запускает перевод накопленного PCM-буфера через Gemini REST.
+     * Создаёт новую пару если её нет, иначе обновляет последнюю незакрытую.
+     */
+    private fun triggerRestTranslation() {
+        val audioBytes: ByteArray = synchronized(phraseAudioBuffer) {
+            val data = phraseAudioBuffer.toByteArray()
+            phraseAudioBuffer.reset()
+            data
+        }
+
+        if (audioBytes.isEmpty()) {
+            logger.d("triggerRestTranslation: empty buffer, skipping")
+            return
+        }
+
+        if (activeApiKey.isEmpty()) {
+            logger.w("triggerRestTranslation: no API key")
+            return
+        }
+
+        // Создаём пустую пару СРАЗУ — пользователь увидит что система обрабатывает
+        val pairId = openNewPair()
+
+        // Отменяем предыдущий незавершённый запрос если есть (бывает при быстрой речи)
+        translateJob?.cancel()
+        translateJob = viewModelScope.launch {
+            val startedAt = System.currentTimeMillis()
+            runCatching {
+                translationClient.translate(audioBytes, activeApiKey)
+            }.onSuccess { result ->
+                val elapsed = System.currentTimeMillis() - startedAt
+                logger.d("REST translate ✓ ${elapsed}ms: '${result.original}' → '${result.translation}'")
+
+                // Игнорируем пустые ответы (модель решила что это шум)
+                if (result.original.isBlank() && result.translation.isBlank()) {
+                    // Удаляем пустую пару
+                    _state.update { st ->
+                        st.copy(translatorPairs = st.translatorPairs.filterNot { it.id == pairId })
+                    }
+                    return@onSuccess
+                }
+
+                // Заполняем пару финальным чёрным текстом
+                updatePair(pairId) { pair ->
+                    pair.copy(
+                        originalText = result.original,
+                        translationText = result.translation,
+                        originalIsFinal = true,
+                        translationIsFinal = true,
+                        originalIsRefined = true,
+                        translationIsRefined = true,
+                        originalLang = detectLangSimple(result.original),
+                        translationLang = detectLangSimple(result.translation),
+                    )
+                }
+                currentPairOriginalFinalized = true
+                currentPairTranslationFinalized = true
+            }.onFailure { e ->
+                val elapsed = System.currentTimeMillis() - startedAt
+                logger.e("REST translate ✗ ${elapsed}ms: ${e.message}")
+                // Удаляем пустую "ожидающую" пару при ошибке
+                _state.update { st ->
+                    st.copy(translatorPairs = st.translatorPairs.filterNot { it.id == pairId })
+                }
+            }
+        }
+    }
+
+    /** Простое определение языка по наличию кириллицы. */
+    private fun detectLangSimple(text: String): String {
+        if (text.isBlank()) return ""
+        val hasCyrillic = text.any { it in 'а'..'я' || it in 'А'..'Я' || it == 'ё' || it == 'Ё' }
+        return if (hasCyrillic) "RU" else "DE"
+    }
+
     private fun com.learnde.app.data.vosk.VoskLang.tagOrEmpty(): String = when (this) {
         com.learnde.app.data.vosk.VoskLang.RU -> "RU"
         com.learnde.app.data.vosk.VoskLang.DE -> "DE"
@@ -777,7 +853,10 @@ class LearnCoreViewModel @Inject constructor(
         }
         safeStopForegroundService()
 
-        voskTranscriber.stop()
+        translateJob?.cancel()
+        translateJob = null
+        synchronized(phraseAudioBuffer) { phraseAudioBuffer.reset() }
+        // voskTranscriber.stop()  // выключено
         runCatching { liveClient.disconnect() }
         runCatching { session?.onExit() }
 
@@ -899,7 +978,9 @@ class LearnCoreViewModel @Inject constructor(
         // из Gemini REST по TurnComplete (см. observeGeminiEvents).
         if (session.id == "translator") {
             resetTranslatorPairs()
-            // voskTranscriber.start(...) — временно выключено
+            synchronized(phraseAudioBuffer) { phraseAudioBuffer.reset() }
+            translateJob?.cancel()
+            translateJob = null
         }
 
         logger.d("◀ Learn.startInternal — awaiting SetupComplete")
@@ -975,6 +1056,13 @@ class LearnCoreViewModel @Inject constructor(
 
                     if (!aiActuallyAudible) {
                         liveClient.sendAudio(chunk)
+
+                        // Параллельно копим PCM в буфер фразы — нужно для отправки
+                        // в Gemini REST на TurnComplete.
+                        if (isTranslator) {
+                            phraseAudioBuffer.write(chunk)
+                        }
+
                         if (droppedMicChunks > 0) {
                             logger.d("Mic: gate opened, dropped $droppedMicChunks chunks during AI tail")
                             droppedMicChunks = 0
@@ -1088,12 +1176,12 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.TurnComplete -> {
-                        // Vosk: форсим finalize playback-recognizer'а — без этого
-                        // partial накапливается между фразами Gemini и склеивается
-                        // с следующим ответом ("hallo wie geht es" + "was" → "hallo wie geht es wir was")
-                        if (activeSession?.id == "translator") {
-                            voskTranscriber.finalizePlayback()
-                        }
+        // Translator: на конце фразы отправляем накопленный PCM
+        // в Gemini REST для транскрипта + перевода (чёрный текст в карточке).
+        if (activeSession?.id == "translator") {
+            // voskTranscriber.finalizePlayback()  // выключено
+            triggerRestTranslation()
+        }
 
                         // Для translator: если record_translation уже сработал —
                         // observeTranslatorFunctionTranscripts уже добавил финальную пару.
