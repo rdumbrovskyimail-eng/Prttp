@@ -1065,21 +1065,18 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.ModelText -> {
-                        // СИНХРОННЫЙ LIVE ТЕКСТ! (Летит одновременно с голосом 50 мс задержки)
+                        // Пишем синхронно ПЕРЕВОД (за ~20мс по слогам) в момент, когда говорит нейросеть 
                         if (activeSession?.id == "translator") {
                             val pairId = currentOpenPairId ?: openNewPair()
-
+                            
                             updatePair(pairId) { pair ->
                                 pair.copy(
-                                    translationText = pair.translationText + event.text, // Интерактивная дельта
+                                    translationText = pair.translationText + event.text,
                                     translationIsFinal = false,
                                     translationIsRefined = false,
-                                    translationLang = "DE" // Подсвечиваем тег
                                 )
                             }
-
-                            lastModelActivityAtMs = System.currentTimeMillis()
-                            hasModelOutputThisTurn = true
+                            lastModelActivityAtMs = System.currentTimeMillis(); hasModelOutputThisTurn = true
                             startStuckTurnWatchdog()
                             return@collect
                         }
