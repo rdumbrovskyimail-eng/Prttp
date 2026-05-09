@@ -387,7 +387,7 @@ private fun PairCard(pair: TranslationPair) {
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        // Оригинал (Ввод Микрофоном / Локальный Vosk)
+        // Оригинал (Gemini Live Input ASR)
         TranscriptBlock(
             text = pair.originalText,
             lang = pair.originalLang,
