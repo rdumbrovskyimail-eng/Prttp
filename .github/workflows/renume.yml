@@ -40,6 +40,7 @@ jobs:
           echo "=== Files containing 'learnde' in content ==="
           grep -rl 'learnde' . \
             --exclude-dir='.git' \
+            --exclude-dir='.github' \
             --exclude-dir='build' \
             --exclude-dir='.gradle' \
             --exclude-dir='.idea' \
@@ -49,6 +50,7 @@ jobs:
           echo "=== Paths containing 'learnde' in name ==="
           find . \
             -not -path './.git/*' \
+            -not -path './.github/*' \
             -not -path './build/*' \
             -not -path './.gradle/*' \
             -name '*learnde*' \
@@ -59,6 +61,7 @@ jobs:
         run: |
           grep -rl 'learnde' . \
             --exclude-dir='.git' \
+            --exclude-dir='.github' \
             --exclude-dir='build' \
             --exclude-dir='.gradle' \
             --exclude-dir='.idea' \
@@ -83,6 +86,7 @@ jobs:
         run: |
           find . -depth \
             -not -path './.git/*' \
+            -not -path './.github/*' \
             -not -path './build/*' \
             -not -path './.gradle/*' \
             -type d \
@@ -100,6 +104,7 @@ jobs:
         run: |
           find . -depth \
             -not -path './.git/*' \
+            -not -path './.github/*' \
             -not -path './build/*' \
             -not -path './.gradle/*' \
             -type f \
@@ -120,6 +125,7 @@ jobs:
           echo "=== Checking for leftover 'learnde' in content ==="
           CONTENT_HITS=$(grep -rl 'learnde' . \
             --exclude-dir='.git' \
+            --exclude-dir='.github' \
             --exclude-dir='build' \
             --exclude-dir='.gradle' \
             || true)
@@ -127,6 +133,7 @@ jobs:
           echo "=== Checking for leftover 'learnde' in paths ==="
           PATH_HITS=$(find . \
             -not -path './.git/*' \
+            -not -path './.github/*' \
             -not -path './build/*' \
             -name '*learnde*' \
             || true)
