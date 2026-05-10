@@ -3,30 +3,11 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.VIBRATE" />
-
-    <queries>
-        <intent>
-            <action android:name="android.speech.RecognitionService" />
-        </intent>
-    </queries>
-
-    <!-- Android 13+ READ_MEDIA_IMAGES для импорта PNG-фона сцены -->
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <!-- Legacy для Android ≤ 12 -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
 
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <uses-feature android:name="android.hardware.camera.ar" android:required="false" />
 
     <application
         android:name=".GeminiLiveApplication"
@@ -58,11 +39,6 @@
             android:name=".GeminiLiveForegroundService"
             android:foregroundServiceType="microphone|mediaPlayback"
             android:exported="false" />
-
-        <meta-data
-            android:name="com.google.ar.core"
-            android:value="optional"
-            tools:replace="android:value" />
 
     </application>
 
