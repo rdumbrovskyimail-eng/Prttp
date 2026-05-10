@@ -940,15 +940,14 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.Interrupted -> {
-                        // Translator: при barge-in закрываем текущую пару и стартуем mirror на том что успело прийти.
                         if (activeSession?.id == "translator" && currentOpenPairId != null) {
                             val pairId = currentOpenPairId!!
-                            val partial = _state.value.translatorPairs
-                                .find { it.id == pairId }?.translationText.orEmpty().trim()
-                            updatePair(pairId) { it.copy(originalIsFinal = true, translationIsFinal = true) }
-                            if (partial.isNotEmpty()) {
-                                triggerMirrorTranslation(pairId, partial)
-                            }
+                            updatePair(pairId) { it.copy(
+                                originalIsFinal = true,
+                                translationIsFinal = true,
+                                originalIsRefined = true,
+                                translationIsRefined = true,
+                            ) }
                             currentOpenPairId = null
                         }
 
@@ -968,7 +967,12 @@ class LearnCoreViewModel @Inject constructor(
                         // Здесь просто закрываем пару под следующую фразу пользователя.
                         if (activeSession?.id == "translator" && currentOpenPairId != null) {
                             val pairId = currentOpenPairId!!
-                            updatePair(pairId) { it.copy(originalIsFinal = true, translationIsFinal = true) }
+                            updatePair(pairId) { it.copy(
+                                originalIsFinal = true,
+                                translationIsFinal = true,
+                                originalIsRefined = true,   // ✓✓ — Gemini ASR это и есть финал
+                                translationIsRefined = true,
+                            ) }
                             currentOpenPairId = null
                         }
 
