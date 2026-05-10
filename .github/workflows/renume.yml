@@ -16,25 +16,16 @@ jobs:
 
       - name: Move directories
         run: |
-          # Перемещаем основную папку с кодом
-          if [ -d "app/src/main/java/com/learnde" ]; then
-            mkdir -p app/src/main/java/com/translate
-            mv app/src/main/java/com/learnde/* app/src/main/java/com/translate/
-            rm -rf app/src/main/java/com/learnde
+          if[ -d "app/src/main/java/com/learnde" ]; then
+            mv app/src/main/java/com/learnde app/src/main/java/com/translate
           fi
           
-          # Перемещаем папку с Android-тестами (если она есть)
-          if[ -d "app/src/androidTest/java/com/learnde" ]; then
-            mkdir -p app/src/androidTest/java/com/translate
-            mv app/src/androidTest/java/com/learnde/* app/src/androidTest/java/com/translate/
-            rm -rf app/src/androidTest/java/com/learnde
+          if [ -d "app/src/androidTest/java/com/learnde" ]; then
+            mv app/src/androidTest/java/com/learnde app/src/androidTest/java/com/translate
           fi
           
-          # Перемещаем папку с Unit-тестами (если она есть)
           if[ -d "app/src/test/java/com/learnde" ]; then
-            mkdir -p app/src/test/java/com/translate
-            mv app/src/test/java/com/learnde/* app/src/test/java/com/translate/
-            rm -rf app/src/test/java/com/learnde
+            mv app/src/test/java/com/learnde app/src/test/java/com/translate
           fi
 
       - name: Commit and Push changes
