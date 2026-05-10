@@ -63,6 +63,7 @@ private object GeminiPalette {
 @Composable
 fun TranslateScreen(
     onNavigateToSettings: () -> Unit,
+    onBack: () -> Unit,
     viewModel: TranslatorViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -78,9 +79,15 @@ fun TranslateScreen(
         if (!isActive) viewModel.startSession()
     }
 
+    androidx.activity.compose.BackHandler {
+        viewModel.stopSession()
+        onBack()
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(GeminiPalette.Background)) {
         Column(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
             TopBar(
+                onBack = { viewModel.stopSession(); onBack() },
                 onSettings = onNavigateToSettings,
                 isActive = isActive,
                 isAiSpeaking = state.isAiSpeaking,
@@ -113,13 +120,17 @@ fun TranslateScreen(
 }
 
 @Composable
-private fun TopBar(onSettings: () -> Unit, isActive: Boolean, isAiSpeaking: Boolean, isMicActive: Boolean) {
+private fun TopBar(onBack: () -> Unit, onSettings: () -> Unit, isActive: Boolean, isAiSpeaking: Boolean, isMicActive: Boolean) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        IconButton(onClick = onBack) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад", tint = GeminiPalette.TextPrimary)
+        }
+        Spacer(Modifier.width(4.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text("Gemini Translate", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = GeminiPalette.BrandBlue)
+            Text("Gemini Translate", fontSize = 20.sp, fontWeight = FontWeight.W600, color = GeminiPalette.BrandBlue)
             val statusText = when {
                 isActive && isAiSpeaking -> "Нейросеть говорит..."
                 isActive && isMicActive -> "Слушаю вас..."
