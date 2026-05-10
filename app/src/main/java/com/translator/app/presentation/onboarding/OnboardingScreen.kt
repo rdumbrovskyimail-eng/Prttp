@@ -61,9 +61,7 @@ fun OnboardingScreen(
     val uriHandler = LocalUriHandler.current
 
     LaunchedEffect(Unit) {
-        if (viewModel.apiKey.isNotEmpty()) {
-            onNavigateToTranslator()
-        }
+        if (viewModel.apiKey.isNotEmpty()) onNavigateToTranslator()
     }
 
     Column(
