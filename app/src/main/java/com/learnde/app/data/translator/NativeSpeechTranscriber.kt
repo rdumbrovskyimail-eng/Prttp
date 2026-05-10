@@ -275,6 +275,8 @@ class NativeSpeechTranscriber @Inject constructor(
         SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "BUSY"
         SpeechRecognizer.ERROR_SERVER -> "SERVER"
         SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "SPEECH_TIMEOUT"
+        12 -> "LANGUAGE_UNAVAILABLE"
+        13 -> "LANGUAGE_NOT_SUPPORTED"
         else -> "UNKNOWN($code)"
     }
 }
