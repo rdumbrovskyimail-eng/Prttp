@@ -318,8 +318,6 @@ class GeminiLiveClient(
                         put("topP", config.topP)
                         if (config.topK > 0) put("topK", config.topK)
                         put("maxOutputTokens", config.maxOutputTokens)
-                        if (config.presencePenalty != 0f) put("presencePenalty", config.presencePenalty)
-                        if (config.frequencyPenalty != 0f) put("frequencyPenalty", config.frequencyPenalty)
                     }
 
                     if (config.responseModality == "AUDIO") {
