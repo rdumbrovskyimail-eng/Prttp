@@ -29,12 +29,6 @@ android {
 
         // Оставляем только нужные локали — ускоряет packaging
         resourceConfigurations += listOf("ru", "de", "en")
-
-        // Vosk натив только для ARM-устройств в проде.
-        // Если нужен x86_64 эмулятор для отладки — добавь "x86_64".
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
-        }
     }
 
     buildFeatures {
