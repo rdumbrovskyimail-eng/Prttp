@@ -12,6 +12,12 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
     <!-- Android 13+ READ_MEDIA_IMAGES для импорта PNG-фона сцены -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <!-- Legacy для Android ≤ 12 -->
