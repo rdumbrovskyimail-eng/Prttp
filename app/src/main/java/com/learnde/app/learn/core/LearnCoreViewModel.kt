@@ -1037,9 +1037,6 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.InputTranscript -> {
-                        // Translator: игнорируем Gemini Live input ASR — он кривой.
-                        // Используем NativeSpeechTranscriber. Для остальных сессий — обрабатываем как раньше.
-                        if (activeSession?.id == "translator") return@collect
                         transcriptChannel.trySend(TranscriptOp.UserDelta(event.text))
                     }
 
