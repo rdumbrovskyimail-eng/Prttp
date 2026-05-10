@@ -62,8 +62,8 @@ data class SessionConfig(
     val autoActivityDetection: Boolean = true,
     val vadStartSensitivity: String = "START_SENSITIVITY_LOW",
     val vadEndSensitivity: String = "END_SENSITIVITY_LOW",
-    val vadPrefixPaddingMs: Int = 20,
-    val vadSilenceDurationMs: Int = 100,
+    val vadPrefixPaddingMs: Int = 150,
+    val vadSilenceDurationMs: Int = 400,
 
     // ── System Instruction ──
     val systemInstruction: String = DEFAULT_SYSTEM_INSTRUCTION,
