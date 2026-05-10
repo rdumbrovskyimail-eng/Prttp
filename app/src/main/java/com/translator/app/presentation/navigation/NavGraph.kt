@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.translator.app.presentation.debug.DebugLogsScreen
 import com.translator.app.presentation.onboarding.OnboardingScreen
 import com.translator.app.presentation.settings.SettingsScreen
 import com.translator.app.presentation.translator.TranslateScreen
@@ -20,11 +21,18 @@ fun AppNavGraph() {
         composable("translator") {
             TranslateScreen(
                 onNavigateToSettings = { navController.navigate("settings") },
+                onNavigateToLogs = { navController.navigate("logs") },
                 onBack = { navController.popBackStack() }
             )
         }
         composable("settings") {
-            SettingsScreen(onBack = { navController.popBackStack() })
+            SettingsScreen(
+                onBack = { navController.popBackStack() },
+                onNavigateToLogs = { navController.navigate("logs") }
+            )
+        }
+        composable("logs") {
+            DebugLogsScreen(onBack = { navController.popBackStack() })
         }
     }
 }
