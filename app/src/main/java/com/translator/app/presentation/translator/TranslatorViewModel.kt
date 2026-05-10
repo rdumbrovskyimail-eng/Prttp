@@ -2,17 +2,26 @@
 // ПОЛНАЯ ЗАМЕНА
 // Путь: app/src/main/java/com/translator/app/presentation/translator/TranslatorViewModel.kt
 //
-// ВОЗВРАЩЕНО:
-//   [+] Reconnect с экспоненциальным backoff (как в старой версии)
+// ВОЗВРАЩЕНО ИЗ LearnCoreViewModel:
+//   [+] Reconnect с экспоненциальным backoff
 //   [+] Авто-ротация API ключей при rate-limit
-//   [+] Запуск/остановка GeminiLiveForegroundService (стабильность фона)
-//   [+] Передача всех настроек в AudioEngine: jitter, boost, AEC, gain
-//   [+] Лог-параметр logRawWebSocketFrames
-//   [+] Watchdog зависшего ответа модели
+//   [+] Запуск/остановка GeminiLiveForegroundService через
+//       startForegroundService (Android 8+ требует именно его для FGS)
+//   [+] Передача всех настроек в AudioEngine
+//   [+] Логирование RAW WS-кадров (logRawWebSocketFrames)
+//   [+] Watchdog зависшего ответа модели (5000ms, как для translator)
+//   [+] Авто-старт микрофона через 150ms после SetupComplete,
+//       но ТОЛЬКО если RECORD_AUDIO разрешен (иначе ждём действия пользователя)
+//   [+] Interrupted делает audioEngine.flushPlayback() (мгновенный сброс
+//       audio buffer при перебивании)
 // ═══════════════════════════════════════════════════════════
 package com.translator.app.presentation.translator
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.datastore.core.DataStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -70,6 +79,7 @@ class TranslatorViewModel @Inject constructor(
 
     @Volatile private var cachedSettings: AppSettings = AppSettings()
     @Volatile private var activeApiKey: String = ""
+    @Volatile private var fgsStarted: Boolean = false
 
     private val pairMutex = Mutex()
 
@@ -77,6 +87,11 @@ class TranslatorViewModel @Inject constructor(
         viewModelScope.launch { audioEngine.initPlayback() }
         observeGeminiEvents()
     }
+
+    private fun hasMicPermission(): Boolean =
+        ContextCompat.checkSelfPermission(
+            appContext, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
 
     fun toggleMic() {
         if (_state.value.isMicActive) stopMic() else startMic()
@@ -117,14 +132,41 @@ class TranslatorViewModel @Inject constructor(
             audioEngine.setUseAec(settings.useAec)
 
             // ─── Запустить FGS для стабильности в фоне ───
-            runCatching {
-                appContext.startService(
-                    GeminiLiveForegroundService.startIntent(appContext, settings.forceSpeakerOutput)
-                )
-            }.onFailure { logger.e("FGS start failed: ${it.message}") }
+            // КРИТИЧНО: на Android 8+ FGS должен стартоваться через
+            // startForegroundService, а не startService. Иначе на Android 12+
+            // отбираются права на VOICE_COMMUNICATION → AudioRecord UOE.
+            startForegroundServiceSafe(settings.forceSpeakerOutput)
 
             connectInternal()
         }
+    }
+
+    private fun startForegroundServiceSafe(forceSpeaker: Boolean) {
+        if (!hasMicPermission()) {
+            logger.w("FGS not started — RECORD_AUDIO not granted yet")
+            return
+        }
+        runCatching {
+            val intent = GeminiLiveForegroundService.startIntent(appContext, forceSpeaker)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                appContext.startForegroundService(intent)
+            } else {
+                appContext.startService(intent)
+            }
+            fgsStarted = true
+            logger.d("FGS started (forceSpeaker=$forceSpeaker)")
+        }.onFailure {
+            fgsStarted = false
+            logger.e("FGS start failed: ${it.javaClass.simpleName}: ${it.message}")
+        }
+    }
+
+    private fun stopForegroundServiceSafe() {
+        if (!fgsStarted) return
+        runCatching {
+            appContext.startService(GeminiLiveForegroundService.stopIntent(appContext))
+        }
+        fgsStarted = false
     }
 
     private suspend fun connectInternal() {
@@ -147,9 +189,7 @@ class TranslatorViewModel @Inject constructor(
             audioEngine.stopCapture()
             liveClient.disconnect()
 
-            runCatching {
-                appContext.startService(GeminiLiveForegroundService.stopIntent(appContext))
-            }
+            stopForegroundServiceSafe()
 
             _state.update {
                 it.copy(
@@ -161,7 +201,34 @@ class TranslatorViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Вызывается из UI после того, как RECORD_AUDIO permission получен.
+     * Если FGS ещё не запустился (потому что permission не было) — стартуем сейчас.
+     */
+    fun onMicPermissionGranted() {
+        if (!fgsStarted) {
+            startForegroundServiceSafe(cachedSettings.forceSpeakerOutput)
+        }
+        if (!_state.value.isMicActive &&
+            (_state.value.connectionStatus == ConnectionStatus.Ready ||
+             _state.value.connectionStatus == ConnectionStatus.Recording)
+        ) {
+            startMic()
+        }
+    }
+
     private fun startMic() {
+        if (!hasMicPermission()) {
+            logger.w("startMic skipped — no RECORD_AUDIO permission")
+            return
+        }
+        if (_state.value.isMicActive) {
+            logger.d("startMic skipped — already active")
+            return
+        }
+        // Если FGS ещё не стартовал — стартуем сейчас (после permission grant)
+        if (!fgsStarted) startForegroundServiceSafe(cachedSettings.forceSpeakerOutput)
+
         _state.update { it.copy(isMicActive = true, connectionStatus = ConnectionStatus.Recording) }
         micJob = viewModelScope.launch {
             launch { audioEngine.micOutput.collect { chunk -> liveClient.sendAudio(chunk) } }
@@ -187,15 +254,17 @@ class TranslatorViewModel @Inject constructor(
                     is GeminiEvent.SetupComplete -> {
                         reconnectAttempt = 0
                         _state.update { it.copy(connectionStatus = ConnectionStatus.Ready) }
-                        // ═══ Translator UX: мгновенный старт микрофона как в LearnCoreViewModel ═══
-                        // Старая логика: после SetupComplete + GREETING_WARMUP_MS=150ms → startMic().
-                        // Пользователь сразу может говорить, без тапа по кнопке.
+                        // Translator UX: мгновенный старт микрофона через 150ms,
+                        // но ТОЛЬКО если RECORD_AUDIO уже разрешён.
                         viewModelScope.launch {
                             delay(150)
-                            if (!_state.value.isMicActive &&
+                            if (hasMicPermission() &&
+                                !_state.value.isMicActive &&
                                 _state.value.connectionStatus == ConnectionStatus.Ready
                             ) {
                                 startMic()
+                            } else if (!hasMicPermission()) {
+                                logger.d("Auto-start mic deferred — waiting for RECORD_AUDIO permission")
                             }
                         }
                     }
@@ -223,7 +292,6 @@ class TranslatorViewModel @Inject constructor(
                         startStuckTurnWatchdog()
                     }
                     is GeminiEvent.Interrupted -> {
-                        // Перебили модель — мгновенно сбрасываем audio buffer (как в LearnCoreViewModel)
                         runCatching { audioEngine.flushPlayback() }
                         _state.update { it.copy(isAiSpeaking = false) }
                         hasModelOutputThisTurn = false
@@ -282,7 +350,6 @@ class TranslatorViewModel @Inject constructor(
                             )
                         }
                         audioEngine.stopCapture()
-                        // Reconnect только если это не штатное закрытие
                         if (event.code != 1000 && event.code != 1001) {
                             scheduleReconnect()
                         }
@@ -362,9 +429,8 @@ class TranslatorViewModel @Inject constructor(
     private fun startStuckTurnWatchdog() {
         stuckTurnWatchdogJob?.cancel()
         stuckTurnWatchdogJob = viewModelScope.launch {
-            delay(5000)  // STUCK_TURN_TIMEOUT_TRANSLATOR_MS
+            delay(5000)
 
-            // Не паникуем, если модель ВСЁ ЕЩЁ играет аудио (просто длинный ответ)
             val now = System.currentTimeMillis()
             val sinceLastAudio = now - lastAiAudioChunkAtMs
             if (lastAiAudioChunkAtMs > 0L && sinceLastAudio < 2_000L) {
@@ -380,7 +446,6 @@ class TranslatorViewModel @Inject constructor(
                 hasModelOutputThisTurn = false
                 lastAiAudioChunkAtMs = 0L
                 _state.update { it.copy(isAiSpeaking = false) }
-                // Финализируем текущую пару
                 pairMutex.withLock {
                     val openId = currentOpenPairId
                     if (openId != null) {
