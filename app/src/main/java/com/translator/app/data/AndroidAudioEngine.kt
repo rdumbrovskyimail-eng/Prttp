@@ -2,13 +2,13 @@
 // ПОЛНАЯ ЗАМЕНА
 // Путь: app/src/main/java/com/translator/app/data/AndroidAudioEngine.kt
 //
-// ВОЗВРАЩЕНО:
-//   [+] Программный playback boost (штатное усиление динамика):
-//       PCM-сэмплы умножаются на playbackBoost (1.0..2.0) с soft-clip
-//       перед записью в AudioTrack. По умолчанию 1.6 — динамик заметно
-//       громче без искажений речи. Меняется через setPlaybackBoost().
-//   [+] AGC, NS, AEC, jitter buffer (как раньше).
-//   [+] stopCapture: stop() → cancelAndJoin() → release() (быстрый выход).
+// ФИКСЫ:
+//   [+] Программный playback boost (штатное усиление динамика)
+//   [+] AGC, NS, AEC, jitter buffer
+//   [+] stopCapture: stop() → cancelAndJoin() → release() (быстрый выход)
+//   [+] Fallback цепочка audio source: VOICE_COMMUNICATION → MIC → DEFAULT
+//       Решает UnsupportedOperationException на OEM, не поддерживающих
+//       VOICE_COMMUNICATION с 16kHz (Xiaomi/Huawei/некоторые Samsung).
 // ═══════════════════════════════════════════════════════════
 package com.translator.app.data
 
@@ -51,15 +51,10 @@ class AndroidAudioEngine(
     @Volatile private var jitterTimeoutMs = 150L
 
     @Volatile private var playbackGain: Float = 1.0f
-    @Volatile private var micGain: Float = 2.0f         // максимум для дистанции 40см
+    @Volatile private var micGain: Float = 2.0f
     @Volatile private var forceSpeakerOutput: Boolean = true
     @Volatile private var useAec: Boolean = true
 
-    /**
-     * Программное усиление воспроизведения (штатный boost динамика).
-     * 1.0 = без буста, 1.6 (по умолчанию) = +60% — заметно громче, без клиппинга речи,
-     * 2.0 = максимум, soft-clip защищает от искажений.
-     */
     @Volatile private var playbackBoost: Float = 1.6f
 
     // ═══ FLOWS ═══
@@ -133,6 +128,64 @@ class AndroidAudioEngine(
     //  CAPTURE
     // ════════════════════════════════════════════════════════════════════
 
+    /**
+     * Создание AudioRecord с fallback по source. На некоторых OEM
+     * VOICE_COMMUNICATION + 16kHz даёт UnsupportedOperationException —
+     * пробуем MIC, потом DEFAULT.
+     */
+    @Suppress("MissingPermission")
+    private fun tryCreateRecorder(sampleRate: Int, minBuf: Int): Pair<AudioRecord?, Int> {
+        val sources = listOf(
+            "VOICE_COMMUNICATION" to MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            "MIC" to MediaRecorder.AudioSource.MIC,
+            "DEFAULT" to MediaRecorder.AudioSource.DEFAULT
+        )
+        for ((label, source) in sources) {
+            val rec = try {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    AudioRecord.Builder()
+                        .setAudioSource(source)
+                        .setAudioFormat(
+                            AudioFormat.Builder()
+                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                .setSampleRate(sampleRate)
+                                .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                                .build()
+                        )
+                        .setBufferSizeInBytes(minBuf * 2)
+                        .build()
+                } else {
+                    @Suppress("DEPRECATION")
+                    AudioRecord(
+                        source, sampleRate,
+                        AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                        minBuf * 2
+                    )
+                }
+            } catch (e: SecurityException) {
+                logger.e("AudioRecord SECURITY ($label): ${e.message}")
+                return null to 0
+            } catch (e: UnsupportedOperationException) {
+                logger.w("AudioRecord UOE ($label): ${e.message} — trying next source")
+                null
+            } catch (e: IllegalArgumentException) {
+                logger.w("AudioRecord IAE ($label): ${e.message} — trying next source")
+                null
+            } catch (e: Exception) {
+                logger.w("AudioRecord ctor ($label): ${e.javaClass.simpleName}: ${e.message}")
+                null
+            }
+
+            if (rec != null && rec.state == AudioRecord.STATE_INITIALIZED) {
+                logger.d("AudioRecord OK with source=$label")
+                return rec to source
+            }
+            runCatching { rec?.release() }
+        }
+        return null to 0
+    }
+
     @Suppress("MissingPermission")
     override suspend fun startCapture() {
         if (isCapturing) {
@@ -150,47 +203,22 @@ class AndroidAudioEngine(
             return
         }
 
-        val recorder = try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                AudioRecord.Builder()
-                    .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
-                    .setAudioFormat(
-                        AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(sampleRate)
-                            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                            .build()
-                    )
-                    .setBufferSizeInBytes(minBuf * 2)
-                    .build()
-            } else {
-                @Suppress("DEPRECATION")
-                AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION, sampleRate,
-                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf * 2
-                )
-            }
-        } catch (e: SecurityException) {
-            logger.e("SECURITY on AudioRecord ctor: ${e.message}")
-            return
-        } catch (e: Exception) {
-            logger.e("AudioRecord ctor failed: ${e.message}", e)
+        val (recorder, usedSource) = tryCreateRecorder(sampleRate, minBuf)
+        if (recorder == null) {
+            logger.e("AudioRecord: ALL sources failed (VOICE_COMMUNICATION/MIC/DEFAULT). " +
+                    "Check RECORD_AUDIO permission, FGS state, and that no other app holds the mic.")
             return
         }
 
-        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-            logger.e("AudioRecord init failed")
-            runCatching { recorder.release() }
-            return
-        }
-
+        // AEC доступен только при VOICE_COMMUNICATION; на MIC/DEFAULT инициализация
+        // вернёт null или бросит — обернуто в runCatching.
         if (useAec && AcousticEchoCanceler.isAvailable()) {
             runCatching {
                 echoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)?.apply {
                     enabled = true
                 }
-                logger.d("AEC: enabled=${echoCanceler?.enabled}")
-            }.onFailure { logger.e("AEC init error: ${it.message}") }
+                logger.d("AEC: enabled=${echoCanceler?.enabled} (source=$usedSource)")
+            }.onFailure { logger.w("AEC init skipped: ${it.message}") }
         }
 
         if (NoiseSuppressor.isAvailable()) {
@@ -199,7 +227,7 @@ class AndroidAudioEngine(
                     enabled = true
                 }
                 logger.d("NS: enabled=${noiseSuppressor?.enabled}")
-            }.onFailure { logger.e("NoiseSuppressor init error: ${it.message}") }
+            }.onFailure { logger.w("NS init skipped: ${it.message}") }
         }
 
         try {
@@ -210,9 +238,16 @@ class AndroidAudioEngine(
             return
         }
 
+        if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+            logger.e("AudioRecord not in RECORDING state after startRecording()")
+            runCatching { recorder.stop() }
+            runCatching { recorder.release() }
+            return
+        }
+
         audioRecord = recorder
         isCapturing = true
-        logger.d("Recording started (rate=$sampleRate, minBuf=$minBuf)")
+        logger.d("Recording started (rate=$sampleRate, minBuf=$minBuf, source=$usedSource)")
 
         captureJob = engineScope.launch {
             val buffer = ShortArray(minBuf)
@@ -263,9 +298,7 @@ class AndroidAudioEngine(
                             byteBuffer.asShortBuffer().put(buffer, 0, read)
                             _micOutput.tryEmit(rawBytes.copyOf(read * 2))
                         }
-                        read == 0 -> {
-                            yield()
-                        }
+                        read == 0 -> yield()
                         else -> {
                             logger.d("AudioRecord.read returned $read — exiting loop")
                             break
@@ -280,10 +313,6 @@ class AndroidAudioEngine(
         }
     }
 
-    /**
-     * Порядок: stop() → cancelAndJoin() → release().
-     * stop() будит блокирующий read() → exit < 50мс.
-     */
     override suspend fun stopCapture() {
         if (!isCapturing && audioRecord == null) return
         isCapturing = false
@@ -400,11 +429,6 @@ class AndroidAudioEngine(
         }
     }
 
-    /**
-     * Программное усиление PCM 16-bit LE с soft-clip.
-     * Возвращает новый ByteArray, не модифицирует исходный.
-     * Если boost == 1.0 — возвращаем оригинал без копирования.
-     */
     private fun applyPlaybackBoost(pcm: ByteArray): ByteArray {
         val boost = playbackBoost
         if (boost <= 1.001f || pcm.size < 2) return pcm
