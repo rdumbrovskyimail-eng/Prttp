@@ -231,12 +231,25 @@ class NativeSpeechTranscriber @Inject constructor(
         }
 
         override fun onResults(results: Bundle?) {
-            val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-            val text = list?.firstOrNull().orEmpty().trim()
-            if (text.isNotEmpty() && text != lastFinalText) {
-                lastFinalText = text
-                logger.d("NativeSpeech[$lang] FINAL: $text")
-                _events.tryEmit(TranscriptEvent.Final(text, langCodeShort(lang)))
+            val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
+            val scores = results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)
+
+            if (list.isEmpty()) {
+                scheduleRestart(switchLang = false)
+                return
+            }
+
+            // Логируем все кандидаты для диагностики
+            list.forEachIndexed { i, candidate ->
+                val score = scores?.getOrNull(i)?.let { " (conf=%.2f)".format(it) }.orEmpty()
+                logger.d("NativeSpeech[$lang] cand[$i]: '$candidate'$score")
+            }
+
+            val best = pickBestCandidate(list, scores).trim()
+            if (best.isNotEmpty() && best != lastFinalText) {
+                lastFinalText = best
+                logger.d("NativeSpeech[$lang] FINAL: $best")
+                _events.tryEmit(TranscriptEvent.Final(best, langCodeShort(lang)))
             }
             scheduleRestart(switchLang = false)
         }
@@ -301,5 +314,65 @@ class NativeSpeechTranscriber @Inject constructor(
         12 -> "LANGUAGE_UNAVAILABLE"
         13 -> "LANGUAGE_NOT_SUPPORTED"
         else -> "UNKNOWN($code)"
+    }
+
+    /**
+     * Выбирает лучшего кандидата из результатов ASR.
+     *
+     * Стратегия:
+     *  1. Отбрасываем кандидаты, начинающиеся с типичных hallucination-паттернов
+     *     ("алло", "ой", "эй") — recognizer часто их вставляет на коротких фразах.
+     *  2. Если остались — берём первого (он самый уверенный).
+     *  3. Если все отфильтрованы — возвращаем первого как есть.
+     */
+    private fun pickBestCandidate(
+        candidates: List<String>,
+        scores: FloatArray?
+    ): String {
+        if (candidates.isEmpty()) return ""
+        if (candidates.size == 1) return candidates[0]
+
+        // Префиксы-паразиты, которые ASR часто добавляет к коротким фразам
+        val hallucinationPrefixes = listOf(
+            "алло", "Алло", "АЛЛО",
+            "ой ", "Ой ",
+            "эй ", "Эй ",
+            "ну ", "Ну ",
+            "так ", "Так "
+        )
+
+        // Берём первого кандидата (самого уверенного) и проверяем его на паразит-префикс
+        val top = candidates[0]
+        val hasHallucination = hallucinationPrefixes.any { top.startsWith(it) }
+
+        if (!hasHallucination) return top
+
+        // Топ-кандидат содержит паразит → ищем чистого среди остальных
+        for (i in 1 until candidates.size) {
+            val c = candidates[i]
+            if (hallucinationPrefixes.none { c.startsWith(it) }) {
+                // Проверяем что он не катастрофически короче (это будет огрызок)
+                if (c.length >= top.length / 2) {
+                    logger.d("NativeSpeech: hallucination filter [$top] → [$c]")
+                    return c
+                }
+            }
+        }
+
+        // Чистого нет — обрезаем паразит-префикс с топа
+        var cleaned = top
+        for (prefix in hallucinationPrefixes) {
+            if (cleaned.startsWith(prefix)) {
+                cleaned = cleaned.removePrefix(prefix).trim()
+                    .removePrefix(",").removePrefix(".").trim()
+                break
+            }
+        }
+        if (cleaned.isNotEmpty() && cleaned.length >= 2) {
+            logger.d("NativeSpeech: stripped hallucination prefix [$top] → [$cleaned]")
+            return cleaned
+        }
+
+        return top
     }
 }
