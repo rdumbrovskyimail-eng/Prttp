@@ -713,9 +713,11 @@ class LearnCoreViewModel @Inject constructor(
         // Translator работает на одном audio-клиенте с input/output audio transcription.
         // Параллельный text-клиент отключён — он добавлял латентность из-за общего rate-pool.
 
-        // Translator: ресет пар.
+        // Translator: ресет пар + старт нативного транскриптора голоса пользователя
         if (session.id == "translator") {
             resetTranslatorPairs()
+            startNativeSpeechObserver()
+            nativeSpeech.start()
         }
 
         logger.d("◀ Learn.startInternal — awaiting SetupComplete")
@@ -989,6 +991,9 @@ class LearnCoreViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.InputTranscript -> {
+                        // Translator: игнорируем Gemini Live input ASR — он кривой.
+                        // Используем NativeSpeechTranscriber. Для остальных сессий — обрабатываем как раньше.
+                        if (activeSession?.id == "translator") return@collect
                         transcriptChannel.trySend(TranscriptOp.UserDelta(event.text))
                     }
 
