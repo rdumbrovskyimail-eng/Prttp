@@ -53,6 +53,7 @@ class LearnCoreViewModel @Inject constructor(
     private val vocabularyEnforcer: com.learnde.app.learn.domain.VocabularyEnforcer,
     private val translatorSession: com.learnde.app.learn.sessions.translator.TranslatorSession,
     private val translationClient: com.learnde.app.data.translator.GeminiTranslationClient,
+    private val nativeSpeech: com.learnde.app.data.translator.NativeSpeechTranscriber,
 ) : ViewModel() {
 
     companion object {
@@ -387,10 +388,19 @@ class LearnCoreViewModel @Inject constructor(
     }
 
     private fun triggerMirrorTranslation(pairId: Long, geminiVoiceText: String) {
+        // ═══════════════════════════════════════════════════════════
+        // ВРЕМЕННО ОТКЛЮЧЕНО (2026-05-10)
+        // Причина: транскрипт пользователя теперь приходит из системного
+        // Android SpeechRecognizer (NativeSpeechTranscriber) — он точнее
+        // и быстрее, чем reverse-translate через Gemini Flash Lite.
+        // Код ниже сохранён для возможного возврата.
+        // ═══════════════════════════════════════════════════════════
+        logger.d("triggerMirrorTranslation: DISABLED (using NativeSpeechTranscriber)")
+        return
+
+        /*
         if (geminiVoiceText.isBlank() || activeApiKey.isEmpty()) return
 
-        // НЕ отменяем предыдущие — каждая пара получает свою корутину.
-        // Это позволяет параллельно ждать REST для нескольких пар при быстром диалоге.
         viewModelScope.launch {
             runCatching {
                 translationClient.reverseTranslate(geminiVoiceText, activeApiKey)
@@ -408,6 +418,7 @@ class LearnCoreViewModel @Inject constructor(
                 }
             }.onFailure { logger.w("Mirror translation failed: ${it.message}") }
         }
+        */
     }
     
     private fun resetTranslatorPairs() {
