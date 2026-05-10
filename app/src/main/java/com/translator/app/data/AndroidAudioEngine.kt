@@ -265,47 +265,23 @@ class AndroidAudioEngine(
         logger.d("Recording started (rate=$sampleRate, minBuf=$minBuf, source=$usedSource, pool=${poolBufSize}B×12)")
 
         captureJob = engineScope.launch {
-val buffer = ShortArray(minBuf)
+            val buffer = ShortArray(minBuf)
 
-    // ─── Biquad HPF (Butterworth, fc=120 Hz, fs=16 kHz) — единственный спектральный фильтр ───
-    val b0 = 0.9459779f; val b1 = -1.8919558f; val b2 = 0.9459779f
-    val a1 = -1.8890331f; val a2 = 0.8948785f
-    var x1 = 0f; var x2 = 0f; var y1 = 0f; var y2 = 0f
-
-    // ─── AGC (rolling peak) — ВЕРНУЛИ из baseline, он реально работал ───
+    // ═══ Программный AGC (оригинальный baseline — единственное что реально работает) ═══
     var rollingPeak = 4000
-    val targetPeak = 22000
+    val targetPeak = 24000
     val agcAttack = 0.4f
     val agcRelease = 0.015f
-    val agcMaxBoost = 6.0f
-    val agcMinBoost = 0.7f
+    val agcMaxBoost = 8.0f
+    val agcMinBoost = 0.6f
     val noiseFloor = 300
-
-    // ─── Лёгкий soft gate — НЕ режет, только приглушает фон ───
-    // Главное отличие от старой v3: не закрывается в ноль, минимум 0.15 gain.
-    // Это сохраняет тихие согласные внутри длинных слов.
-    var rmsEnv = 0f
-    val rmsAttack = 0.5f
-    val rmsRelease = 0.003f      // в 3 раза медленнее — длинные слова не разваливаются
-    val gateFloor = 200f          // ниже этого — приглушаем
-    val gateCeiling = 600f        // выше — полный gain
-    val minGateGain = 0.15f       // НЕ ноль! сохраняем тихие хвосты слов
-
-    // ─── De-clicker (только настоящие щелчки, не атаки речи) ───
-    var prevSample = 0f
-    var prevDelta = 0f
-    val declickThresholdSq = 2.5e8f  // в 4 раза выше старого — не режет твёрдые согласные
-
-    // ─── Soft-clip (Padé tanh) ───
-    val clipThreshold = 30000f
-    val invClipThresh = 1f / clipThreshold
 
     try {
         while (isActive && isCapturing) {
             val read = recorder.read(buffer, 0, buffer.size)
             when {
                 read > 0 -> {
-                    // Шаг 1: измеряем пик блока для AGC
+                    // Поиск пика блока
                     var localPeak = 0
                     for (i in 0 until read) {
                         val v = kotlin.math.abs(buffer[i].toInt())
@@ -321,41 +297,44 @@ val buffer = ShortArray(minBuf)
                         .coerceIn(agcMinBoost, agcMaxBoost)
                     val finalGain = agcGain * micGain
 
-                    // Шаг 2: обработка сэмпл за сэмплом
+                    // Применяем gain + soft-clip к int16
+                    for (i in 0 until read) {
+                        val amplified = (buffer[i] * finalGain).toInt()
+                        buffer[i] = when {
+                            amplified > Short.MAX_VALUE -> Short.MAX_VALUE
+                            amplified < Short.MIN_VALUE -> Short.MIN_VALUE
+                            else -> amplified.toShort()
+                        }
+                    }
+
+                    // Прямая запись в выходной буфер из пула (zero-alloc)
                     val outBytes = pool.borrow()
                     var outPos = 0
-                    var i = 0
-                    while (i < read) {
-                        val raw = buffer[i].toFloat()
+                    for (i in 0 until read) {
+                        val s = buffer[i].toInt()
+                        outBytes[outPos] = (s and 0xFF).toByte()
+                        outBytes[outPos + 1] = ((s ushr 8) and 0xFF).toByte()
+                        outPos += 2
+                    }
 
-                        // Biquad HPF — убирает rumble, не трогает речь
-                        val hpf = b0 * raw + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
-                        x2 = x1; x1 = raw
-                        y2 = y1; y1 = hpf
-
-                        // De-click (только настоящие щелчки)
-                        val delta = hpf - prevSample
-                        val accel = delta - prevDelta
-                        prevDelta = delta
-                        prevSample = hpf
-                        val cleaned = if (accel * accel > declickThresholdSq) {
-                            prevSample * 0.3f
-                        } else hpf
-
-                        // RMS envelope для мягкого гейта
-                        val sq = cleaned * cleaned
-                        val coef = if (sq > rmsEnv) rmsAttack else rmsRelease
-                        rmsEnv += coef * (sq - rmsEnv)
-                        val envLevel = kotlin.math.sqrt(rmsEnv)
-
-                        // Soft gate: плавный gain от minGateGain до 1.0
-                        val gateGain = when {
-                            envLevel <= gateFloor -> minGateGain
-                            envLevel >= gateCeiling -> 1f
-                            else -> {
-                                val t = (envLevel - gateFloor) / (gateCeiling - gateFloor)
-                                minGateGain + t * (1f - minGateGain)
-                            }
+                    val chunk = AudioChunk(outBytes, outPos, pool)
+                    if (!_micOutput.tryEmit(chunk)) {
+                        chunk.release()
+                    }
+                }
+                read == 0 -> yield()
+                else -> {
+                    logger.d("AudioRecord.read returned $read — exiting loop")
+                    break
+                }
+            }
+        }
+    } catch (e: Exception) {
+        logger.e("CAPTURE LOOP ERROR: ${e.message}", e)
+    } finally {
+        logger.d("Capture loop exited")
+    }
+        }
                         }
 
                         // Применяем AGC + soft gate
