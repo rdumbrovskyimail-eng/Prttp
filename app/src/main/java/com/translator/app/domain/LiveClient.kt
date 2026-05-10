@@ -19,6 +19,7 @@
 // ═══════════════════════════════════════════════════════════
 package com.translator.app.domain
 
+import com.translator.app.domain.model.AudioChunk
 import com.translator.app.domain.model.ConversationMessage
 import com.translator.app.domain.model.GeminiEvent
 import com.translator.app.domain.model.SessionConfig
@@ -66,7 +67,7 @@ interface LiveClient {
      */
     suspend fun connect(apiKey: String, config: SessionConfig, logRaw: Boolean = false)
 
-    fun sendAudio(pcmData: ByteArray)
+    fun sendAudio(chunk: AudioChunk)
 
     /**
      * Отправить initial user message после SetupComplete.
