@@ -1161,14 +1161,7 @@ class LearnCoreViewModel @Inject constructor(
         sessionReadyAtMs = System.currentTimeMillis()
         val session = activeSession ?: return
 
-        // Translator: прогреваем REST-соединение в фоне с двумя попытками — первая часто холодная (DNS+TLS).
-        if (session.id == "translator" && activeApiKey.isNotEmpty()) {
-            viewModelScope.launch {
-                translationClient.warmUp(activeApiKey)
-                delay(800)
-                translationClient.warmUp(activeApiKey)
-            }
-        }
+        // REST warmup отключён вместе с reverseTranslate (используем NativeSpeechTranscriber).
         contextSeeded = true
         modelStartedSpeakingThisTurn = false
 
