@@ -17,11 +17,11 @@ plugins {
 }
 
 android {
-    namespace = "com.learnde.app"
+    namespace = "com.translator.app"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.learnde.app"
+        applicationId = "com.translator.app"
         minSdk = 26
         targetSdk = 36
         versionCode = 1

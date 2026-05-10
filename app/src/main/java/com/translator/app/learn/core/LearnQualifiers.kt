@@ -1,0 +1,25 @@
+// ═══════════════════════════════════════════════════════════
+// НОВЫЙ ФАЙЛ
+// Путь: app/src/main/java/com/translator/app/learn/core/LearnQualifiers.kt
+//
+// Hilt-квалификаторы для разделения Voice- и Learn-инстансов
+// LiveClient и AudioEngine.
+//
+// VoiceScope       — используется в VoiceViewModel (имплицитно — он
+//                    инжектит без квалификатора, и старый @Singleton binding
+//                    по дефолту считается VoiceScope).
+// LearnScope       — для автономного учебного стека.
+// ═══════════════════════════════════════════════════════════
+package com.translator.app.learn.core
+
+import javax.inject.Qualifier
+
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class LearnScope
+
+// ФИКС: Возвращаем VoiceScope, так как он используется в модуле Voice
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class VoiceScope
+
