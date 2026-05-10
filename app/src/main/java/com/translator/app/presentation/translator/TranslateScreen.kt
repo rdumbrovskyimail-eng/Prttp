@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -63,6 +64,7 @@ private object GeminiPalette {
 @Composable
 fun TranslateScreen(
     onNavigateToSettings: () -> Unit,
+    onNavigateToLogs: () -> Unit,
     onBack: () -> Unit,
     viewModel: TranslatorViewModel = hiltViewModel()
 ) {
@@ -89,9 +91,11 @@ fun TranslateScreen(
             TopBar(
                 onBack = { viewModel.stopSession(); onBack() },
                 onSettings = onNavigateToSettings,
+                onLogs = onNavigateToLogs,
                 isActive = isActive,
                 isAiSpeaking = state.isAiSpeaking,
                 isMicActive = state.isMicActive,
+                connectionStatus = state.connectionStatus,
             )
 
             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
@@ -120,7 +124,15 @@ fun TranslateScreen(
 }
 
 @Composable
-private fun TopBar(onBack: () -> Unit, onSettings: () -> Unit, isActive: Boolean, isAiSpeaking: Boolean, isMicActive: Boolean) {
+private fun TopBar(
+    onBack: () -> Unit,
+    onSettings: () -> Unit,
+    onLogs: () -> Unit,
+    isActive: Boolean,
+    isAiSpeaking: Boolean,
+    isMicActive: Boolean,
+    connectionStatus: ConnectionStatus
+) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -132,14 +144,19 @@ private fun TopBar(onBack: () -> Unit, onSettings: () -> Unit, isActive: Boolean
         Column(modifier = Modifier.weight(1f)) {
             Text("Gemini Translate", fontSize = 20.sp, fontWeight = FontWeight.W600, color = GeminiPalette.BrandBlue)
             val statusText = when {
+                connectionStatus == ConnectionStatus.Reconnecting -> "Переподключение..."
+                connectionStatus == ConnectionStatus.Connecting -> "Подключение..."
                 isActive && isAiSpeaking -> "Нейросеть говорит..."
                 isActive && isMicActive -> "Слушаю вас..."
                 isActive -> "Готов к переводу"
-                else -> "Подключение..."
+                else -> "Отключено"
             }
             AnimatedContent(targetState = statusText, label = "statusText") { text ->
                 Text(text, fontSize = 13.sp, color = GeminiPalette.TextSecondary, fontWeight = FontWeight.Medium)
             }
+        }
+        IconButton(onClick = onLogs) {
+            Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Логи", tint = GeminiPalette.TextPrimary)
         }
         IconButton(onClick = onSettings) {
             Icon(Icons.Filled.Settings, contentDescription = "Настройки", tint = GeminiPalette.TextPrimary)
