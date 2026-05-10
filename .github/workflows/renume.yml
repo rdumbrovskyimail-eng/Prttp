@@ -1,42 +1,166 @@
-name: Rename Package to Translate
+name: Rename Package learnde → translator
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (preview changes without committing)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      target_branch:
+        description: 'Branch to apply changes to'
+        required: false
+        default: 'main'
 
 jobs:
   rename:
+    name: Rename learnde → translator
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.target_branch }}
+          fetch-depth: 0
 
-      - name: Replace text in files
+      - name: Configure Git
         run: |
-          find . -type f \( -name "*.kt" -o -name "*.xml" -o -name "*.kts" -o -name "*.pro" \) -exec sed -i 's/com\.learnde/com.translate/g' {} +
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Move directories
+      - name: Preview affected files
         run: |
-          if[ -d "app/src/main/java/com/learnde" ]; then
-            mv app/src/main/java/com/learnde app/src/main/java/com/translate
-          fi
-          
-          if [ -d "app/src/androidTest/java/com/learnde" ]; then
-            mv app/src/androidTest/java/com/learnde app/src/androidTest/java/com/translate
-          fi
-          
-          if[ -d "app/src/test/java/com/learnde" ]; then
-            mv app/src/test/java/com/learnde app/src/test/java/com/translate
-          fi
+          echo "=== Files containing 'learnde' in content ==="
+          grep -rl 'learnde' . \
+            --exclude-dir='.git' \
+            --exclude-dir='build' \
+            --exclude-dir='.gradle' \
+            --exclude-dir='.idea' \
+            || echo "(none found)"
 
-      - name: Commit and Push changes
+          echo ""
+          echo "=== Paths containing 'learnde' in name ==="
+          find . \
+            -not -path './.git/*' \
+            -not -path './build/*' \
+            -not -path './.gradle/*' \
+            -name '*learnde*' \
+            || echo "(none found)"
+
+      - name: Replace 'learnde' in file contents
+        if: github.event.inputs.dry_run == 'false'
         run: |
-          git config --global user.name "GitHub Actions Bot"
-          git config --global user.email "actions@github.com"
-          git add .
-          
-          if ! git diff-index --quiet HEAD; then
-            git commit -m "Refactor: changed package from learnde to translate"
-            git push
+          grep -rl 'learnde' . \
+            --exclude-dir='.git' \
+            --exclude-dir='build' \
+            --exclude-dir='.gradle' \
+            --exclude-dir='.idea' \
+            --include='*.kt' \
+            --include='*.java' \
+            --include='*.xml' \
+            --include='*.gradle' \
+            --include='*.kts' \
+            --include='*.json' \
+            --include='*.yaml' \
+            --include='*.yml' \
+            --include='*.md' \
+            --include='*.txt' \
+            --include='*.properties' \
+            --include='*.pro' \
+          | xargs -I{} sed -i 's/learnde/translator/g' {}
+
+          echo "✅ File contents updated."
+
+      - name: Rename directories containing 'learnde'
+        if: github.event.inputs.dry_run == 'false'
+        run: |
+          find . -depth \
+            -not -path './.git/*' \
+            -not -path './build/*' \
+            -not -path './.gradle/*' \
+            -type d \
+            -name '*learnde*' \
+          | while IFS= read -r dir; do
+              new_dir="${dir//learnde/translator}"
+              echo "Moving: $dir → $new_dir"
+              mv "$dir" "$new_dir"
+            done
+
+          echo "✅ Directories renamed."
+
+      - name: Rename files containing 'learnde' in filename
+        if: github.event.inputs.dry_run == 'false'
+        run: |
+          find . -depth \
+            -not -path './.git/*' \
+            -not -path './build/*' \
+            -not -path './.gradle/*' \
+            -type f \
+            -name '*learnde*' \
+          | while IFS= read -r file; do
+              dir=$(dirname "$file")
+              base=$(basename "$file")
+              new_base="${base//learnde/translator}"
+              echo "Renaming: $file → $dir/$new_base"
+              mv "$file" "$dir/$new_base"
+            done
+
+          echo "✅ Files renamed."
+
+      - name: Verify no remaining 'learnde' references
+        if: github.event.inputs.dry_run == 'false'
+        run: |
+          echo "=== Checking for leftover 'learnde' in content ==="
+          CONTENT_HITS=$(grep -rl 'learnde' . \
+            --exclude-dir='.git' \
+            --exclude-dir='build' \
+            --exclude-dir='.gradle' \
+            || true)
+
+          echo "=== Checking for leftover 'learnde' in paths ==="
+          PATH_HITS=$(find . \
+            -not -path './.git/*' \
+            -not -path './build/*' \
+            -name '*learnde*' \
+            || true)
+
+          if [ -n "$CONTENT_HITS" ] || [ -n "$PATH_HITS" ]; then
+            echo "⚠️  Remaining references:"
+            echo "$CONTENT_HITS"
+            echo "$PATH_HITS"
+            exit 1
           else
-            echo "Изменений не найдено. Возможно, пакет уже переименован."
+            echo "✅ No 'learnde' references remaining."
           fi
+
+      - name: Commit and push changes
+        if: github.event.inputs.dry_run == 'false'
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing to commit — repository already clean."
+          else
+            git commit -m "refactor: rename package learnde → translator
+
+            - Replaced all occurrences of 'learnde' in file contents
+            - Renamed all directories named 'learnde' to 'translator'
+            - Renamed all files with 'learnde' in filename
+
+            [automated by rename-package workflow]"
+            git push origin ${{ github.event.inputs.target_branch }}
+            echo "✅ Changes pushed to ${{ github.event.inputs.target_branch }}."
+          fi
+
+      - name: Dry run summary
+        if: github.event.inputs.dry_run == 'true'
+        run: |
+          echo ""
+          echo "ℹ️  DRY RUN complete — no changes were made."
+          echo "    Set 'dry_run = false' to apply the rename."
