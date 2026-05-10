@@ -63,7 +63,7 @@ class AndroidAudioEngine(
 
     // ═══ FLOWS ═══
     private val _micOutput = MutableSharedFlow<AudioChunk>(
-        replay = 0, extraBufferCapacity = 64,
+        replay = 0, extraBufferCapacity = 32,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     override val micOutput: Flow<AudioChunk> = _micOutput.asSharedFlow()
@@ -256,7 +256,7 @@ class AndroidAudioEngine(
         // Создаётся один раз — потом переиспользуется при следующих startCapture.
         val poolBufSize = minBuf * 2
         val pool = bufferPool?.takeIf { /* same-size check via probe */ true }
-            ?: AudioBufferPool(bufferSize = poolBufSize, poolCapacity = 12).also {
+            ?: AudioBufferPool(bufferSize = poolBufSize, poolCapacity = 32).also {
                 bufferPool = it
             }
 
@@ -265,150 +265,137 @@ class AndroidAudioEngine(
         logger.d("Recording started (rate=$sampleRate, minBuf=$minBuf, source=$usedSource, pool=${poolBufSize}B×12)")
 
         captureJob = engineScope.launch {
-            val buffer = ShortArray(minBuf)
+val buffer = ShortArray(minBuf)
 
-            // ─── Lookahead ring buffer (40 сэмплов @ 16kHz = 2.5 ms) ───
-            // Гейт «видит» будущее → атаки слов не режутся.
-            val lookaheadSize = 40
-            val lookahead = FloatArray(lookaheadSize)
-            var lookaheadIdx = 0
-            var lookaheadFilled = 0
+    // ─── Biquad HPF (Butterworth, fc=120 Hz, fs=16 kHz) — единственный спектральный фильтр ───
+    val b0 = 0.9459779f; val b1 = -1.8919558f; val b2 = 0.9459779f
+    val a1 = -1.8890331f; val a2 = 0.8948785f
+    var x1 = 0f; var x2 = 0f; var y1 = 0f; var y2 = 0f
 
-            // ─── Biquad HPF (Butterworth, fc=120 Hz, fs=16 kHz, Q=0.707) ───
-            // 12 dB/oct срез — убирает rumble, не трогает голос.
-            val b0 = 0.9459779f; val b1 = -1.8919558f; val b2 = 0.9459779f
-            val a1 = -1.8890331f; val a2 = 0.8948785f
-            var x1 = 0f; var x2 = 0f; var y1 = 0f; var y2 = 0f
+    // ─── AGC (rolling peak) — ВЕРНУЛИ из baseline, он реально работал ───
+    var rollingPeak = 4000
+    val targetPeak = 22000
+    val agcAttack = 0.4f
+    val agcRelease = 0.015f
+    val agcMaxBoost = 6.0f
+    val agcMinBoost = 0.7f
+    val noiseFloor = 300
 
-            // ─── Pre-emphasis (подъём +6 dB/oct, помогает ASR на /s/, /sh/, /t/) ───
-            val preEmphCoef = 0.97f
-            var preEmphPrev = 0f
+    // ─── Лёгкий soft gate — НЕ режет, только приглушает фон ───
+    // Главное отличие от старой v3: не закрывается в ноль, минимум 0.15 gain.
+    // Это сохраняет тихие согласные внутри длинных слов.
+    var rmsEnv = 0f
+    val rmsAttack = 0.5f
+    val rmsRelease = 0.003f      // в 3 раза медленнее — длинные слова не разваливаются
+    val gateFloor = 200f          // ниже этого — приглушаем
+    val gateCeiling = 600f        // выше — полный gain
+    val minGateGain = 0.15f       // НЕ ноль! сохраняем тихие хвосты слов
 
-            // ─── RMS envelope (быстрая атака, медленный релиз) ───
-            var rmsEnv = 0f
-            val rmsAttack = 0.35f
-            val rmsRelease = 0.008f
+    // ─── De-clicker (только настоящие щелчки, не атаки речи) ───
+    var prevSample = 0f
+    var prevDelta = 0f
+    val declickThresholdSq = 2.5e8f  // в 4 раза выше старого — не режет твёрдые согласные
 
-            // ─── Hysteresis Noise Gate (без chattering) ───
-            val gateOpenThresh = 700f   // открыть, когда сигнал явно слышен
-            val gateCloseThresh = 350f  // закрыть только когда совсем тихо
-            var gateOpen = false
-            var gateGain = 0f
-            val gateRampUp = 0.25f
-            val gateRampDown = 0.02f
+    // ─── Soft-clip (Padé tanh) ───
+    val clipThreshold = 30000f
+    val invClipThresh = 1f / clipThreshold
 
-            // ─── De-clicker через 2-ю производную ───
-            var prevSample = 0f
-            var prevDelta = 0f
+    try {
+        while (isActive && isCapturing) {
+            val read = recorder.read(buffer, 0, buffer.size)
+            when {
+                read > 0 -> {
+                    // Шаг 1: измеряем пик блока для AGC
+                    var localPeak = 0
+                    for (i in 0 until read) {
+                        val v = kotlin.math.abs(buffer[i].toInt())
+                        if (v > localPeak) localPeak = v
+                    }
+                    rollingPeak = if (localPeak > rollingPeak) {
+                        (rollingPeak + (localPeak - rollingPeak) * agcAttack).toInt()
+                    } else {
+                        (rollingPeak - (rollingPeak - localPeak) * agcRelease).toInt()
+                    }
+                    if (rollingPeak < noiseFloor) rollingPeak = noiseFloor
+                    val agcGain = (targetPeak.toFloat() / rollingPeak.toFloat())
+                        .coerceIn(agcMinBoost, agcMaxBoost)
+                    val finalGain = agcGain * micGain
 
-            // ─── Финальное усиление и soft-clip ───
-            val nearFieldBoost = 4.5f
-            val clipThreshold = 28000f
-            val invClipThresh = 1f / clipThreshold
+                    // Шаг 2: обработка сэмпл за сэмплом
+                    val outBytes = pool.borrow()
+                    var outPos = 0
+                    var i = 0
+                    while (i < read) {
+                        val raw = buffer[i].toFloat()
 
-            try {
-                while (isActive && isCapturing) {
-                    val read = recorder.read(buffer, 0, buffer.size)
-                    when {
-                        read > 0 -> {
-                            // ★ Берём буфер из пула — обычно zero-alloc.
-                            val outBytes = pool.borrow()
-                            var outPos = 0
-                            var i = 0
+                        // Biquad HPF — убирает rumble, не трогает речь
+                        val hpf = b0 * raw + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+                        x2 = x1; x1 = raw
+                        y2 = y1; y1 = hpf
 
-                            // ═══════ HOT LOOP ═══════
-                            while (i < read) {
-                                val raw = buffer[i].toFloat()
+                        // De-click (только настоящие щелчки)
+                        val delta = hpf - prevSample
+                        val accel = delta - prevDelta
+                        prevDelta = delta
+                        prevSample = hpf
+                        val cleaned = if (accel * accel > declickThresholdSq) {
+                            prevSample * 0.3f
+                        } else hpf
 
-                                // 1. Biquad HPF (Direct Form I)
-                                val hpf = b0 * raw + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
-                                x2 = x1; x1 = raw
-                                y2 = y1; y1 = hpf
+                        // RMS envelope для мягкого гейта
+                        val sq = cleaned * cleaned
+                        val coef = if (sq > rmsEnv) rmsAttack else rmsRelease
+                        rmsEnv += coef * (sq - rmsEnv)
+                        val envLevel = kotlin.math.sqrt(rmsEnv)
 
-                                // 2. Pre-emphasis
-                                val preEmph = hpf - preEmphCoef * preEmphPrev
-                                preEmphPrev = hpf
-
-                                // 3. De-click через acceleration (d²y/dt²)
-                                val delta = preEmph - prevSample
-                                val accel = delta - prevDelta
-                                prevDelta = delta
-                                prevSample = preEmph
-                                val deClicked = if (accel * accel > 6.4e7f) {
-                                    prevSample * 0.3f
-                                } else preEmph
-
-                                // 4. Lookahead ring (запись текущего, чтение задержанного)
-                                val delayed = lookahead[lookaheadIdx]
-                                lookahead[lookaheadIdx] = deClicked
-                                lookaheadIdx = (lookaheadIdx + 1) % lookaheadSize
-                                if (lookaheadFilled < lookaheadSize) lookaheadFilled++
-
-                                // 5. RMS envelope (на свежем сэмпле — гейт видит будущее)
-                                val sq = deClicked * deClicked
-                                val coef = if (sq > rmsEnv) rmsAttack else rmsRelease
-                                rmsEnv += coef * (sq - rmsEnv)
-                                val envLevel = kotlin.math.sqrt(rmsEnv)
-
-                                // 6. Hysteresis gate
-                                if (!gateOpen && envLevel > gateOpenThresh) gateOpen = true
-                                else if (gateOpen && envLevel < gateCloseThresh) gateOpen = false
-
-                                val targetGain = if (gateOpen) 1f else 0f
-                                val rampCoef = if (targetGain > gateGain) gateRampUp else gateRampDown
-                                gateGain += rampCoef * (targetGain - gateGain)
-
-                                // Пока lookahead не заполнен — выход «прогревается», ничего не пишем.
-                                if (lookaheadFilled < lookaheadSize) {
-                                    i++
-                                    continue
-                                }
-
-                                // 7. Применяем гейт к ЗАДЕРЖАННОМУ сэмплу + boost + пользовательский micGain
-                                var out = delayed * gateGain * nearFieldBoost * micGain
-
-                                // 8. Padé[3/2] tanh soft-clip: tanh(x) ≈ x·(27+x²) / (27+9x²)
-                                val xn = out * invClipThresh
-                                val xn2 = xn * xn
-                                val softened = xn * (27f + xn2) / (27f + 9f * xn2)
-                                out = softened * clipThreshold
-
-                                val asInt = when {
-                                    out >= 32767f -> 32767
-                                    out <= -32768f -> -32768
-                                    else -> out.toInt()
-                                }
-
-                                // 9. Прямая little-endian запись (минуя ByteBuffer/ShortBuffer view)
-                                outBytes[outPos] = (asInt and 0xFF).toByte()
-                                outBytes[outPos + 1] = ((asInt ushr 8) and 0xFF).toByte()
-                                outPos += 2
-                                i++
-                            }
-
-                            // Если в этом проходе нет валидного выхода (прогрев lookahead) — вернуть буфер в пул.
-                            if (outPos == 0) {
-                                pool.release(outBytes)
-                            } else {
-                                val chunk = AudioChunk(outBytes, outPos, pool)
-                                if (!_micOutput.tryEmit(chunk)) {
-                                    // Никто не слушает / overflow → освобождаем буфер, чтоб не было утечки.
-                                    chunk.release()
-                                }
+                        // Soft gate: плавный gain от minGateGain до 1.0
+                        val gateGain = when {
+                            envLevel <= gateFloor -> minGateGain
+                            envLevel >= gateCeiling -> 1f
+                            else -> {
+                                val t = (envLevel - gateFloor) / (gateCeiling - gateFloor)
+                                minGateGain + t * (1f - minGateGain)
                             }
                         }
-                        read == 0 -> yield()
-                        else -> {
-                            logger.d("AudioRecord.read returned $read — exiting loop")
-                            break
+
+                        // Применяем AGC + soft gate
+                        var out = cleaned * finalGain * gateGain
+
+                        // Soft-clip
+                        val xn = out * invClipThresh
+                        val xn2 = xn * xn
+                        val softened = xn * (27f + xn2) / (27f + 9f * xn2)
+                        out = softened * clipThreshold
+
+                        val asInt = when {
+                            out >= 32767f -> 32767
+                            out <= -32768f -> -32768
+                            else -> out.toInt()
                         }
+
+                        outBytes[outPos] = (asInt and 0xFF).toByte()
+                        outBytes[outPos + 1] = ((asInt ushr 8) and 0xFF).toByte()
+                        outPos += 2
+                        i++
+                    }
+
+                    val chunk = AudioChunk(outBytes, outPos, pool)
+                    if (!_micOutput.tryEmit(chunk)) {
+                        chunk.release()
                     }
                 }
-            } catch (e: Exception) {
-                logger.e("CAPTURE LOOP ERROR: ${e.message}", e)
-            } finally {
-                logger.d("Capture loop exited")
+                read == 0 -> yield()
+                else -> {
+                    logger.d("AudioRecord.read returned $read — exiting loop")
+                    break
+                }
             }
+        }
+    } catch (e: Exception) {
+        logger.e("CAPTURE LOOP ERROR: ${e.message}", e)
+    } finally {
+        logger.d("Capture loop exited")
+    }
         }
     }
 
