@@ -13,9 +13,7 @@
 // ═══════════════════════════════════════════════════════════
 package com.translator.app.presentation.theme
 
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
@@ -202,11 +200,3 @@ data class AppPalette(
 
 /** CompositionLocal — текущая палитра в любом Composable. */
 val LocalAppPalette = staticCompositionLocalOf { AppPalette.Aurora }
-
-/** Удобный аксессор: AppPalette.current */
-object LocalPaletteAccessor {
-    val current: AppPalette
-        @Composable
-        @ReadOnlyComposable
-        get() = androidx.compose.runtime.currentComposer.consume(LocalAppPalette)
-}
