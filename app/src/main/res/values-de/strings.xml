@@ -1,34 +1,52 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="translator_title">Live-Übersetzer</string>
+    <string name="app_name">Translator</string>
 
-    <string name="translator_status_idle">Tippen zum Starten</string>
-    <string name="translator_status_ready">Bereit</string>
-    <string name="translator_status_listening">Höre zu</string>
-    <string name="translator_status_speaking">Übersetze</string>
+    <!-- ═══ Permissions ═══ -->
+    <string name="mic_permission_rationale">Für den Sprachassistenten wird Mikrofonzugriff benötigt</string>
+    <string name="notification_permission_rationale">Für die Sitzungsanzeige werden Benachrichtigungen benötigt</string>
 
-    <string name="translator_lang_user">Ihre Sprache</string>
-    <string name="translator_lang_target">Deutsch</string>
-    <string name="translator_lang_codes_user">RU &#xB7; UA</string>
-    <string name="translator_lang_code_target">DE</string>
+    <!-- ═══ Translator Screen ═══ -->
+    <string name="translator_title">Translator</string>
 
-    <string name="translator_hint_idle_title">Sprachübersetzer</string>
-    <string name="translator_hint_idle_subtitle">Russisch &#xB7; Ukrainisch &#xB7; Deutsch\nSofortige Sprachübersetzung</string>
-    <string name="translator_hint_active_title">Sprechen Sie jederzeit</string>
-    <string name="translator_hint_active_subtitle">Die Übersetzung erscheint hier und wird vorgelesen</string>
+    <!-- Statusleiste -->
+    <string name="status_disconnected">Nicht verbunden</string>
+    <string name="status_connecting">Verbinde…</string>
+    <string name="status_reconnecting">Neu verbinden…</string>
+    <string name="status_ready">Bereit</string>
+    <string name="status_listening">Höre zu</string>
+    <string name="status_ai_speaking">Übersetzung</string>
 
-    <string name="translator_bubble_you_speaking">Sie sprechen...</string>
-    <string name="translator_bubble_you">Sie</string>
-    <string name="translator_bubble_translation">Übersetzung</string>
+    <!-- Empty state -->
+    <string name="hint_idle_title">Sprachübersetzer</string>
+    <string name="hint_idle_subtitle">Verbindung wird hergestellt…</string>
+    <string name="hint_active_title">Sprechen Sie einfach</string>
+    <string name="hint_active_subtitle">Die Übersetzung erscheint hier und wird vorgelesen</string>
 
-    <string name="translator_button_start">Start</string>
-    <string name="translator_button_stop">Stopp</string>
+    <!-- Übersetzungskarte -->
+    <string name="card_label_original">Erkannt</string>
+    <string name="card_label_translation">Übersetzung</string>
 
+    <!-- Barrierefreiheit -->
     <string name="cd_back">Zurück</string>
+    <string name="cd_settings">Einstellungen</string>
+    <string name="cd_logs">Protokoll</string>
     <string name="cd_mic_start">Übersetzung starten</string>
-    <string name="cd_mic_stop">Übersetzung stoppen</string>
+    <string name="cd_mic_stop">Übersetzung beenden</string>
 
-    <string name="translator_tutorial_step1">Mikrofon-Taste drücken</string>
-    <string name="translator_tutorial_step2">Natürlich sprechen</string>
-    <string name="translator_tutorial_step3">Übersetzung anhören</string>
+    <!-- ═══ Einstellungen — Erscheinungsbild ═══ -->
+    <string name="settings_section_appearance">Erscheinungsbild</string>
+    <string name="settings_theme_label">Design</string>
+
+    <string name="theme_aurora">Aurora</string>
+    <string name="theme_aurora_desc">Hell · Navy &amp; Bernstein</string>
+
+    <string name="theme_berlin">Berlin Mist</string>
+    <string name="theme_berlin_desc">Hell · Kühler Minimalismus</string>
+
+    <string name="theme_sakura">Sakura</string>
+    <string name="theme_sakura_desc">Hell · Sanftes Rosé &amp; Teal</string>
+
+    <string name="theme_obsidian">Obsidian</string>
+    <string name="theme_obsidian_desc">Dunkel · Türkis &amp; Lavendel</string>
 </resources>
