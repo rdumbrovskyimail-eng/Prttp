@@ -24,6 +24,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.translator.app.presentation.settings.ThemePickerSection
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -87,6 +88,12 @@ fun SettingsScreen(
             modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            ThemePickerSection(
+                selected = com.translator.app.presentation.theme.AppThemeId.fromName(s.themeId),
+                onSelect = { id -> viewModel.update { copy(themeId = id.name) } }
+            )
+            Spacer(Modifier.height(16.dp))
+
             // ─── 1. AUTH ───
             SectionTitle("Авторизация")
 
