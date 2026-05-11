@@ -80,6 +80,8 @@ data class AppSettings(
 
     // ═══════════════════ 9. UI / THEME ═══════════════════
     val themeMode: ThemeMode = ThemeMode.AUTO,
+    /** ID выбранной темы: AURORA | BERLIN_MIST | SAKURA | OBSIDIAN. По умолчанию Aurora. */
+    val themeId: String = "AURORA",
 
     // ═══════════════════ 10. DEBUG ═══════════════════
     val showDebugLog: Boolean = true,
