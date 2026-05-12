@@ -1,14 +1,14 @@
 // ═══════════════════════════════════════════════════════════
-// НОВЫЙ ФАЙЛ
+// ПОЛНАЯ ЗАМЕНА (v2.0 — Studio Waveform)
 // Путь: app/src/main/java/com/translator/app/presentation/translator/animations/BerlinWaveform.kt
 //
-// АНИМАЦИЯ ДЛЯ "BERLIN MIST" — горизонтальный waveform,
-// в стиле Apple Voice Memos, но плавнее и тоньше.
+// Горизонтальный waveform в стиле Apple Voice Memos / iOS Dictation,
+// но с реальной DSP-точностью и smooth-роллингом.
 //
-// 48 вертикальных столбиков, каждый "запоминает" исторический RMS.
-// При тишине — всё в линию (high < 2px), плавно дышат.
-// Когда Gemini говорит — столбики ВПРАВО получают свежий RMS,
-// а старые сдвигаются влево по rolling window.
+// 56 баров, ring-буфер. Каждые 28 мс — новый сэмпл (35.7 баров/сек).
+// Между сэмплами — критически-затухающий spring к target значению.
+// Idle: лёгкая бегущая синусоида.
+// Speaking: реальные RMS, последние 14 баров — градиент к accentSecondary.
 // ═══════════════════════════════════════════════════════════
 package com.translator.app.presentation.translator.animations
 
@@ -29,47 +29,39 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.translator.app.presentation.theme.AppPalette
 import kotlinx.coroutines.flow.Flow
+import kotlin.math.exp
 import kotlin.math.sin
 
-private const val BARS = 48
+private const val BARS = 56
+private const val PUSH_INTERVAL_NS = 28_000_000L
+private const val ACCENT_TAIL = 14
 
-/**
- * Berlin Mist waveform — холодный минималистичный bar-graph.
- *
- * Каждый bar плавно интерполирует к новому таргету за ~80ms,
- * благодаря этому даже резкие всплески выглядят "шёлковыми".
- */
 @Composable
 fun BerlinWaveform(
     palette: AppPalette,
     audioFlow: Flow<ByteArray>,
     isAiSpeaking: Boolean
 ) {
-    val audioLevel by rememberAudioLevel(audioFlow, isAiSpeaking, attack = 0.45f, release = 0.05f)
+    val m = rememberAudioMetrics(audioFlow, isAiSpeaking, attack = 0.6f, release = 0.06f)
+    val level by m.level
+    val peak by m.peak
 
-    // История уровней. Кольцевой буфер: индекс = (head + i) % BARS.
-    // Сами значения — двойные: текущее и таргет. Каждый кадр интерполируем.
-    val current = remember { FloatArray(BARS) }
-    val target = remember { FloatArray(BARS) }
-    val head = remember { intArrayOf(0) }
-    val lastPushNanos = remember { longArrayOf(0L) }
+    val current  = remember { FloatArray(BARS) }
+    val target   = remember { FloatArray(BARS) }
+    val head     = remember { intArrayOf(0) }
+    val lastPush = remember { longArrayOf(0L) }
 
-    // "Дыхание" в idle режиме: микро-волна синусом.
-    val breathTransition = rememberInfiniteTransition(label = "berlinBreath")
-    val breathPhase by breathTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = (Math.PI * 2f).toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(3500, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "berlinBreathPhase"
+    val breathTr = rememberInfiniteTransition(label = "berlinBreath")
+    val phase by breathTr.animateFloat(
+        initialValue = 0f, targetValue = (Math.PI * 2f).toFloat(),
+        animationSpec = infiniteRepeatable(tween(3400, easing = LinearEasing), RepeatMode.Restart),
+        label = "berlinPhase"
     )
 
-    // Каждые ~30ms пушим новый сэмпл в кольцо. На каждый кадр — интерполяция.
     LaunchedEffect(audioFlow, isAiSpeaking) {
         var prev = System.nanoTime()
         while (true) {
@@ -77,15 +69,15 @@ fun BerlinWaveform(
                 val dt = (now - prev).coerceAtLeast(0L) / 1_000_000_000f
                 prev = now
 
-                // Пушим новый бар каждые 30мс — даёт скорость 33 бар/сек.
-                if (now - lastPushNanos[0] > 30_000_000L) {
-                    lastPushNanos[0] = now
+                if (now - lastPush[0] > PUSH_INTERVAL_NS) {
+                    lastPush[0] = now
                     head[0] = (head[0] + 1) % BARS
-                    target[head[0]] = if (isAiSpeaking) audioLevel else 0f
+                    // Используем смесь level + peak: peak делает «шипы» острее
+                    target[head[0]] = if (isAiSpeaking) (level * 0.75f + peak * 0.25f) else 0f
                 }
 
-                // Smoothing: current → target экспоненциально.
-                val k = (1f - kotlin.math.exp(-dt * 18f)).coerceIn(0f, 1f)
+                // Critically-damped exponential approach
+                val k = 1f - exp(-dt * 22f)
                 for (i in 0 until BARS) {
                     current[i] += (target[i] - current[i]) * k
                 }
@@ -93,34 +85,33 @@ fun BerlinWaveform(
         }
     }
 
-    Canvas(modifier = Modifier.size(220.dp, 56.dp)) {
+    Canvas(modifier = Modifier.size(240.dp, 60.dp)) {
         val w = size.width
         val h = size.height
-        val barW = w / (BARS * 1.45f)
+        val barW = w / (BARS * 1.55f)
         val gap = (w - barW * BARS) / (BARS - 1)
         val midY = h / 2f
         val maxHalf = h / 2f - 2f
         val minHalf = 1.2.dp.toPx()
 
         for (i in 0 until BARS) {
-            // Читаем кольцо: bar 0 (слева) = самый старый, bar BARS-1 (справа) = свежий.
             val ringIdx = (head[0] + 1 + i) % BARS
             val raw = current[ringIdx]
 
-            // Idle: микро-волна от синуса; speaking: реальный уровень.
             val idleAmp = if (!isAiSpeaking) {
-                (sin(breathPhase + i * 0.18f) * 0.08f + 0.08f).toFloat()
+                (sin(phase + i * 0.19f) * 0.06f + 0.08f).toFloat()
             } else 0f
-            val v = (raw + idleAmp).coerceIn(0f, 1f)
 
-            // Применяем кривую — придаёт "профессиональный" вид (не плоско-линейный).
-            val shaped = v * v * (3f - 2f * v) // smoothstep
-            val half = (minHalf + shaped * (maxHalf - minHalf))
+            val v = (raw + idleAmp).coerceIn(0f, 1f)
+            val shaped = v * v * (3f - 2f * v)        // smoothstep
+            val half = minHalf + shaped * (maxHalf - minHalf)
 
             val x = i * (barW + gap)
-            val color = if (i > BARS - 10 && isAiSpeaking) {
-                // последние 10 баров справа — акцентный цвет (свежий звук)
-                lerpColor(palette.textMuted, palette.accentSecondary, ((i - (BARS - 10)) / 10f))
+
+            // Tail (последние ACCENT_TAIL баров справа) — градиент к accentSecondary
+            val color = if (isAiSpeaking && i > BARS - ACCENT_TAIL) {
+                val t = (i - (BARS - ACCENT_TAIL)).toFloat() / ACCENT_TAIL
+                lerpColor(palette.textMuted, palette.accentSecondary, t)
             } else {
                 palette.textSecondary
             }
@@ -135,16 +126,12 @@ fun BerlinWaveform(
     }
 }
 
-private fun lerpColor(
-    a: androidx.compose.ui.graphics.Color,
-    b: androidx.compose.ui.graphics.Color,
-    t: Float
-): androidx.compose.ui.graphics.Color {
+private fun lerpColor(a: Color, b: Color, t: Float): Color {
     val tt = t.coerceIn(0f, 1f)
-    return androidx.compose.ui.graphics.Color(
-        red = a.red + (b.red - a.red) * tt,
+    return Color(
+        red   = a.red   + (b.red   - a.red)   * tt,
         green = a.green + (b.green - a.green) * tt,
-        blue = a.blue + (b.blue - a.blue) * tt,
+        blue  = a.blue  + (b.blue  - a.blue)  * tt,
         alpha = a.alpha + (b.alpha - a.alpha) * tt
     )
 }
