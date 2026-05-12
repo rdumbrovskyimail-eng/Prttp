@@ -102,6 +102,13 @@ fun ThemePickerSection(
                 desc = "Стиль Google Gemini. Cosmic mesh aura.",
                 onClick = { onSelect(AppThemeId.GEMINI_NEXUS) }
             )
+            ThemeOption(
+                preview = AppPalette.Gem, id = AppThemeId.GEM,
+                isSelected = selected == AppThemeId.GEM,
+                title = "Gem",
+                desc = "Кристал-белая Apple-clean. Чернильное Gemini-пятно.",
+                onClick = { onSelect(AppThemeId.GEM) }
+            )
         }
     }
 }
