@@ -98,6 +98,7 @@ import com.translator.app.presentation.theme.AppThemeId
 import com.translator.app.presentation.theme.LocalAppPalette
 import com.translator.app.presentation.translator.animations.AuroraAura
 import com.translator.app.presentation.translator.animations.BerlinWaveform
+import com.translator.app.presentation.translator.animations.GemInkBloom
 import com.translator.app.presentation.translator.animations.GeminiMeshAura
 import com.translator.app.presentation.translator.animations.GptFluidVoice
 import com.translator.app.presentation.translator.animations.ObsidianOrb
@@ -325,25 +326,35 @@ private fun PairsList(palette: AppPalette, pairs: List<TranslationPair>) {
 
 @Composable
 private fun PairCard(palette: AppPalette, pair: TranslationPair) {
+    val isGem = palette.id == AppThemeId.GEM
     val shadowSpot = if (palette.isDark) Color.Black.copy(alpha = 0.5f) else Color(0x14000000)
+
+    val cardPadding = if (isGem) 10.dp else 18.dp
+    val cardSpacing = if (isGem) 6.dp else 14.dp
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .shadow(
-                elevation = if (palette.isDark) 0.dp else 8.dp,
-                shape = RoundedCornerShape(24.dp),
+                elevation = if (palette.isDark) 0.dp else if (isGem) 2.dp else 8.dp,
+                shape = RoundedCornerShape(if (isGem) 18.dp else 24.dp),
                 spotColor = shadowSpot
             )
-            .clip(RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(if (isGem) 18.dp else 24.dp))
             .background(palette.surfaceElevated)
             .then(
-                if (palette.isDark)
-                    Modifier.border(1.dp, palette.border, RoundedCornerShape(24.dp))
-                else Modifier
+                when {
+                    isGem -> Modifier.border(
+                        1.dp, palette.border, RoundedCornerShape(18.dp)
+                    )
+                    palette.isDark -> Modifier.border(
+                        1.dp, palette.border, RoundedCornerShape(24.dp)
+                    )
+                    else -> Modifier
+                }
             )
-            .padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .padding(cardPadding),
+        verticalArrangement = Arrangement.spacedBy(cardSpacing)
     ) {
         TranscriptBlock(
             palette = palette,
@@ -353,14 +364,21 @@ private fun PairCard(palette: AppPalette, pair: TranslationPair) {
             isFinal = pair.originalIsFinal,
             isRefined = pair.originalIsRefined
         )
-        Box(
-            modifier = Modifier.fillMaxWidth().height(1.dp)
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(Color.Transparent, palette.divider, palette.divider, Color.Transparent)
+        if (isGem) {
+            Box(
+                modifier = Modifier.fillMaxWidth().height(1.dp)
+                    .background(palette.divider.copy(alpha = 0.7f))
+            )
+        } else {
+            Box(
+                modifier = Modifier.fillMaxWidth().height(1.dp)
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(Color.Transparent, palette.divider, palette.divider, Color.Transparent)
+                        )
                     )
-                )
-        )
+            )
+        }
         TranscriptBlock(
             palette = palette,
             text = pair.translationText,
@@ -495,12 +513,22 @@ private fun BottomControlPanel(
                         AppThemeId.OBSIDIAN     -> ObsidianOrb(palette, audioFlow, isAiSpeaking || isMicActive)
                         AppThemeId.OPEN_OASIS   -> GptFluidVoice(palette, audioFlow, isAiSpeaking || isMicActive)
                         AppThemeId.GEMINI_NEXUS -> GeminiMeshAura(palette, audioFlow, isAiSpeaking || isMicActive)
+                        AppThemeId.GEM          -> GemInkBloom(palette, audioFlow, isAiSpeaking || isMicActive)
                     }
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
-        MicButton(palette = palette, isActive = isMicActive, onClick = onToggleMic)
+        if (palette.id == AppThemeId.GEM) {
+            Spacer(Modifier.height(20.dp))
+            GemCapsuleButton(
+                palette = palette,
+                isActive = isMicActive,
+                onClick = onToggleMic
+            )
+        } else {
+            Spacer(Modifier.height(8.dp))
+            MicButton(palette = palette, isActive = isMicActive, onClick = onToggleMic)
+        }
     }
 }
 
