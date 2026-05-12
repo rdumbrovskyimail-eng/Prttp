@@ -45,7 +45,7 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.unit.dp
 import com.translator.app.presentation.theme.AppPalette
 import kotlinx.coroutines.flow.Flow
-import kotlin.PI
+import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
