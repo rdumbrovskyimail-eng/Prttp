@@ -1,12 +1,12 @@
 // ═══════════════════════════════════════════════════════════
-// НОВЫЙ ФАЙЛ
+// ПОЛНАЯ ЗАМЕНА (v2.0)
 // Путь: app/src/main/java/com/translator/app/presentation/settings/ThemePickerSection.kt
 //
-// Секция выбора темы для SettingsScreen.
-// Вставляется в самый верх настроек (premium-приём — оформление сразу).
+// Секция выбора темы для SettingsScreen. 6 тем + живое превью
+// с реальной мини-аура-капсулой каждой палитры.
 //
-// Каждая тема показана как карточка-превью с реальным фоном/акцентами
-// палитры. Tap → сохранение в AppSettings.themeId.
+// Tap → onSelect(AppThemeId) → сохраняется в AppSettings.themeId →
+// LocalAppPalette мгновенно начинает кроссфейд (см. AppTheme.kt).
 // ═══════════════════════════════════════════════════════════
 package com.translator.app.presentation.settings
 
@@ -22,9 +22,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -35,23 +35,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.translator.app.R
 import com.translator.app.presentation.theme.AppPalette
 import com.translator.app.presentation.theme.AppThemeId
 import com.translator.app.presentation.theme.LocalAppPalette
 
-/**
- * Используй внутри SettingsScreen:
- *
- *   ThemePickerSection(
- *       selected = AppThemeId.fromName(settings.themeId),
- *       onSelect = { id -> viewModel.update { copy(themeId = id.name) } }
- *   )
- */
 @Composable
 fun ThemePickerSection(
     selected: AppThemeId,
@@ -63,46 +53,54 @@ fun ThemePickerSection(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Text(
-            text = stringResource(R.string.settings_section_appearance).uppercase(),
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 1.5.sp,
-            color = palette.textMuted,
+            text = "ТЕМА И АНИМАЦИЯ ГОЛОСА",
+            fontSize = 11.sp, fontWeight = FontWeight.W700,
+            letterSpacing = 1.5.sp, color = palette.textMuted,
             modifier = Modifier.padding(start = 4.dp, bottom = 12.dp)
         )
 
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             ThemeOption(
-                preview = AppPalette.Aurora,
-                id = AppThemeId.AURORA,
+                preview = AppPalette.Aurora, id = AppThemeId.AURORA,
                 isSelected = selected == AppThemeId.AURORA,
-                titleRes = R.string.theme_aurora,
-                descRes = R.string.theme_aurora_desc,
+                title = "Aurora",
+                desc = "Премиум-свет. Navy → amber градиент.",
                 onClick = { onSelect(AppThemeId.AURORA) }
             )
             ThemeOption(
-                preview = AppPalette.BerlinMist,
-                id = AppThemeId.BERLIN_MIST,
+                preview = AppPalette.BerlinMist, id = AppThemeId.BERLIN_MIST,
                 isSelected = selected == AppThemeId.BERLIN_MIST,
-                titleRes = R.string.theme_berlin,
-                descRes = R.string.theme_berlin_desc,
+                title = "Berlin Mist",
+                desc = "Холодный Nordic минимализм. Waveform.",
                 onClick = { onSelect(AppThemeId.BERLIN_MIST) }
             )
             ThemeOption(
-                preview = AppPalette.Sakura,
-                id = AppThemeId.SAKURA,
+                preview = AppPalette.Sakura, id = AppThemeId.SAKURA,
                 isSelected = selected == AppThemeId.SAKURA,
-                titleRes = R.string.theme_sakura,
-                descRes = R.string.theme_sakura_desc,
+                title = "Sakura",
+                desc = "Тёплый dusty rose + teal. Капли воды.",
                 onClick = { onSelect(AppThemeId.SAKURA) }
             )
             ThemeOption(
-                preview = AppPalette.Obsidian,
-                id = AppThemeId.OBSIDIAN,
+                preview = AppPalette.Obsidian, id = AppThemeId.OBSIDIAN,
                 isSelected = selected == AppThemeId.OBSIDIAN,
-                titleRes = R.string.theme_obsidian,
-                descRes = R.string.theme_obsidian_desc,
+                title = "Obsidian",
+                desc = "True-black OLED. Энергошар с орбитами.",
                 onClick = { onSelect(AppThemeId.OBSIDIAN) }
+            )
+            ThemeOption(
+                preview = AppPalette.OpenOasis, id = AppThemeId.OPEN_OASIS,
+                isSelected = selected == AppThemeId.OPEN_OASIS,
+                title = "Open Oasis",
+                desc = "Стиль ChatGPT Voice. Fluid morphing orb.",
+                onClick = { onSelect(AppThemeId.OPEN_OASIS) }
+            )
+            ThemeOption(
+                preview = AppPalette.GeminiNexus, id = AppThemeId.GEMINI_NEXUS,
+                isSelected = selected == AppThemeId.GEMINI_NEXUS,
+                title = "Gemini Nexus",
+                desc = "Стиль Google Gemini. Cosmic mesh aura.",
+                onClick = { onSelect(AppThemeId.GEMINI_NEXUS) }
             )
         }
     }
@@ -113,22 +111,22 @@ private fun ThemeOption(
     preview: AppPalette,
     id: AppThemeId,
     isSelected: Boolean,
-    titleRes: Int,
-    descRes: Int,
+    title: String,
+    desc: String,
     onClick: () -> Unit
 ) {
     val current = LocalAppPalette.current
     val borderWidth by animateDpAsState(
         targetValue = if (isSelected) 2.dp else 1.dp,
         animationSpec = spring(stiffness = Spring.StiffnessMedium),
-        label = "border"
+        label = "tBorder"
     )
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(current.surface)
+            .background(if (isSelected) current.accentSoft else current.surface)
             .border(
                 width = borderWidth,
                 color = if (isSelected) current.accentPrimary else current.border,
@@ -138,26 +136,24 @@ private fun ThemeOption(
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Превью — мини-карточка с фоном и градиентной "капсулой" из палитры темы
         ThemePreview(preview)
 
-        Spacer(Modifier.size(14.dp))
+        Spacer(Modifier.width(14.dp))
 
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = stringResource(titleRes),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.W600,
-                color = current.textPrimary
+                text = title,
+                fontSize = 16.sp, fontWeight = FontWeight.W700,
+                color = current.textPrimary, letterSpacing = (-0.2).sp
             )
             Text(
-                text = stringResource(descRes),
-                fontSize = 13.sp,
-                color = current.textSecondary
+                text = desc,
+                fontSize = 12.sp, color = current.textSecondary, lineHeight = 16.sp
             )
         }
 
-        // Selected indicator
+        Spacer(Modifier.width(8.dp))
+
         Box(
             modifier = Modifier
                 .size(20.dp)
@@ -172,9 +168,7 @@ private fun ThemeOption(
         ) {
             if (isSelected) {
                 Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
+                    modifier = Modifier.size(8.dp).clip(CircleShape)
                         .background(current.textOnAccent)
                 )
             }
@@ -184,19 +178,18 @@ private fun ThemeOption(
 
 @Composable
 private fun ThemePreview(preview: AppPalette) {
-    // Карточка 80×54: фон палитры + миниатюрная "капсула" градиента.
     Box(
         modifier = Modifier
-            .size(width = 80.dp, height = 54.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .size(width = 80.dp, height = 50.dp)
+            .clip(RoundedCornerShape(12.dp))
             .background(preview.background)
-            .border(0.5.dp, preview.border, RoundedCornerShape(10.dp)),
+            .border(0.5.dp, preview.border, RoundedCornerShape(12.dp)),
         contentAlignment = Alignment.Center
     ) {
-        // Мини-капсула с градиентом, как сжатая Aurora-капля
+        // Мини-капсула с реальным градиентом палитры — выглядит как уменьшенная Aurora
         Box(
             modifier = Modifier
-                .size(width = 56.dp, height = 14.dp)
+                .size(width = 60.dp, height = 14.dp)
                 .clip(RoundedCornerShape(7.dp))
                 .background(Brush.linearGradient(preview.auraGradient))
         )
