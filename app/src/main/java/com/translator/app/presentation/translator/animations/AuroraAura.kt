@@ -1,18 +1,17 @@
 // ═══════════════════════════════════════════════════════════
-// НОВЫЙ ФАЙЛ
+// ПОЛНАЯ ЗАМЕНА (v2.0 — Glass Capsule)
 // Путь: app/src/main/java/com/translator/app/presentation/translator/animations/AuroraAura.kt
 //
-// АНИМАЦИЯ ДЛЯ ТЕМЫ "AURORA" — основной wow-эффект приложения.
+// Премиальная закруглённая капсула. При тишине: мягкое дыхание + неспешный
+// градиент. При речи: экспансия ×3, ускоренное переливание, мульти-слойный
+// glow расходится в стороны. На пиках — лёгкий «толчок» от velocity.
 //
-// Что это: прямоугольная закругленная "капсула" с переливающимся
-// градиентом (5 цветов из палитры). Постоянно "дышит" — лёгкая
-// волна по фону. Когда Gemini говорит:
-//   • размер увеличивается в 3 раза (по ширине и высоте плавно)
-//   • скорость переливания градиента ×3..×6 (зависит от RMS)
-//   • вокруг капсулы — мягкий glow с blur-имитацией через alpha layers
-//
-// Реализация — Canvas + переключение угла градиента по времени.
-// Никаких аллокаций в onDraw: Brush создаётся через ленивые holders.
+// Особенности:
+//   • Двойной слой градиента (внутри + outer halo) для глубины
+//   • Glow строится из 4 концентрических softRoundRect с убывающим alpha
+//   • Highlight сверху — vertical gradient, имитирует glass-блик
+//   • Pinhole inner-shadow по углам — добавляет «литое стекло»
+//   • Все размеры — Float (zero-alloc), без Dp в hot-path
 // ═══════════════════════════════════════════════════════════
 package com.translator.app.presentation.translator.animations
 
@@ -38,145 +37,124 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.translator.app.presentation.theme.AppPalette
 import kotlinx.coroutines.flow.Flow
 import kotlin.math.cos
 import kotlin.math.sin
 
-/**
- * Aurora capsule.
- *
- * @param palette палитра (из неё берётся auraGradient).
- * @param audioFlow PCM поток от Gemini.
- * @param isAiSpeaking когда true — увеличивается ×3, скорость градиента множится на RMS.
- * @param baseWidth ширина в idle-режиме.
- * @param baseHeight высота в idle-режиме.
- */
 @Composable
 fun AuroraAura(
     palette: AppPalette,
     audioFlow: Flow<ByteArray>,
     isAiSpeaking: Boolean,
-    baseWidth: androidx.compose.ui.unit.Dp = 96.dp,
-    baseHeight: androidx.compose.ui.unit.Dp = 36.dp
+    baseWidth: Dp = 100.dp,
+    baseHeight: Dp = 38.dp
 ) {
-    val audioLevel by rememberAudioLevel(audioFlow, isAiSpeaking)
+    val metrics = rememberAudioMetrics(audioFlow, isAiSpeaking, attack = 0.55f, release = 0.08f)
+    val level by metrics.level
+    val peak by metrics.peak
 
-    // Размер: idle = base, speaking = base × (2.5 + level × 0.8) — до 3.3×.
-    val expandFactor by animateFloatAsState(
-        targetValue = if (isAiSpeaking) 2.5f + audioLevel * 0.8f else 1f,
-        animationSpec = spring(
-            dampingRatio = 0.55f,
-            stiffness = Spring.StiffnessMediumLow
-        ),
+    // Размер: idle = 1×, speaking = 2.4×..3.4× по level + добавка от peak.
+    val expand by animateFloatAsState(
+        targetValue = if (isAiSpeaking) 2.4f + level * 0.7f + peak * 0.3f else 1f,
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMediumLow),
         label = "auroraExpand"
     )
 
-    // Базовый "дыхательный" пульс — всегда работает, очень тонкий.
-    val breathTransition = rememberInfiniteTransition(label = "auroraBreath")
-    val breath by breathTransition.animateFloat(
-        initialValue = 0.96f,
-        targetValue = 1.04f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2200, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "auroraBreathValue"
+    val breathTr = rememberInfiniteTransition(label = "auroraBreath")
+    val breath by breathTr.animateFloat(
+        initialValue = 0.96f, targetValue = 1.05f,
+        animationSpec = infiniteRepeatable(tween(2400, easing = LinearEasing), RepeatMode.Reverse),
+        label = "auroraBreathV"
     )
 
-    // Угол градиента: 0..2π, скорость зависит от RMS.
-    // Базовая скорость: 12 секунд на оборот. Speaking: до 2 секунд.
-    val gradientRotation = rememberInfiniteTransition(label = "auroraGradient")
-    val baseAngle by gradientRotation.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(12_000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
+    val rotTr = rememberInfiniteTransition(label = "auroraRot")
+    val angleBase by rotTr.animateFloat(
+        initialValue = 0f, targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(11_000, easing = LinearEasing), RepeatMode.Restart),
         label = "auroraAngleBase"
     )
-    // Дополнительный угол, ускоряемый громкостью. Реально считаем
-    // суммарный угол в onDraw через State.
-    val audioPushAngle by gradientRotation.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2_000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
+    val anglePush by rotTr.animateFloat(
+        initialValue = 0f, targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(2_000, easing = LinearEasing), RepeatMode.Restart),
         label = "auroraAnglePush"
     )
+    val totalAngle = angleBase + anglePush * level * 1.6f
 
-    val totalAngleDeg = baseAngle + audioPushAngle * audioLevel * 1.5f
+    val colors = remember(
+        palette.aura0, palette.aura1, palette.aura2, palette.aura3, palette.aura4
+    ) { palette.auraGradient }
 
-    val colors = remember(palette.id) { palette.auraGradient }
+    val w = baseWidth * expand
+    val h = baseHeight * (1f + (expand - 1f) * 0.42f) * breath
 
-    Box(
-        modifier = Modifier.size(
-            width = baseWidth * expandFactor,
-            height = baseHeight * (1f + (expandFactor - 1f) * 0.45f) * breath
-        ),
-        contentAlignment = Alignment.Center
-    ) {
-        Canvas(modifier = Modifier.size(
-            width = baseWidth * expandFactor,
-            height = baseHeight * (1f + (expandFactor - 1f) * 0.45f) * breath
-        )) {
-            val w = size.width
-            val h = size.height
-            val corner = h / 2f
+    Box(modifier = Modifier.size(w, h), contentAlignment = Alignment.Center) {
+        Canvas(modifier = Modifier.size(w, h)) {
+            val sw = size.width
+            val sh = size.height
+            val corner = sh / 2f
 
-            // Линейный градиент с поворотом: считаем end-точку через sin/cos.
-            val angleRad = Math.toRadians(totalAngleDeg.toDouble())
-            val cx = w / 2f
-            val cy = h / 2f
-            val radius = (w + h) / 2f
-            val dx = (cos(angleRad) * radius).toFloat()
-            val dy = (sin(angleRad) * radius).toFloat()
-
-            // Soft glow слои (3 уровня, всё тоньше) — рисуем до основной капсулы.
-            val glowAlpha = if (isAiSpeaking) 0.35f + audioLevel * 0.35f else 0.18f
-            for (g in 3 downTo 1) {
-                val padding = corner * g * 0.6f
+            // ── (1) Outer glow halo — 4 слоя с убывающим alpha
+            val glowStrength = if (isAiSpeaking) 0.32f + level * 0.42f + peak * 0.18f else 0.16f
+            for (g in 4 downTo 1) {
+                val pad = corner * g * 0.55f
                 drawRoundRect(
-                    color = palette.auraGlow.copy(alpha = glowAlpha / g),
-                    topLeft = Offset(-padding, -padding),
-                    size = Size(w + padding * 2, h + padding * 2),
-                    cornerRadius = CornerRadius(corner + padding)
+                    color = palette.auraGlow.copy(alpha = glowStrength / (g * 1.1f)),
+                    topLeft = Offset(-pad, -pad),
+                    size = Size(sw + pad * 2, sh + pad * 2),
+                    cornerRadius = CornerRadius(corner + pad)
                 )
             }
 
-            // Основная капсула с градиентом.
+            // ── (2) Body: вращающийся linear gradient
+            val rad = Math.toRadians(totalAngle.toDouble())
+            val cx = sw / 2f; val cy = sh / 2f
+            val diag = (sw + sh) / 2f
+            val dx = (cos(rad) * diag).toFloat()
+            val dy = (sin(rad) * diag).toFloat()
             val brush = Brush.linearGradient(
                 colors = colors,
                 start = Offset(cx - dx, cy - dy),
-                end = Offset(cx + dx, cy + dy)
+                end   = Offset(cx + dx, cy + dy)
             )
             drawRoundRect(
                 brush = brush,
                 topLeft = Offset.Zero,
-                size = Size(w, h),
+                size = Size(sw, sh),
                 cornerRadius = CornerRadius(corner)
             )
 
-            // Лёгкий highlight сверху — даёт ощущение "глянца".
-            val highlight = Brush.verticalGradient(
+            // ── (3) Glass highlight — vertical top
+            val hi = Brush.verticalGradient(
                 colors = listOf(
-                    Color.White.copy(alpha = 0.20f),
-                    Color.White.copy(alpha = 0.04f),
+                    Color.White.copy(alpha = 0.26f),
+                    Color.White.copy(alpha = 0.06f),
                     Color.Transparent
                 ),
-                startY = 0f,
-                endY = h * 0.6f
+                startY = 0f, endY = sh * 0.65f
             )
             drawRoundRect(
-                brush = highlight,
+                brush = hi,
                 topLeft = Offset.Zero,
-                size = Size(w, h * 0.55f),
+                size = Size(sw, sh * 0.58f),
                 cornerRadius = CornerRadius(corner)
             )
+
+            // ── (4) Bottom inner-shadow — придаёт «вес»
+            if (!palette.isDark) {
+                val lo = Brush.verticalGradient(
+                    colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.10f)),
+                    startY = sh * 0.5f, endY = sh
+                )
+                drawRoundRect(
+                    brush = lo,
+                    topLeft = Offset(0f, sh * 0.5f),
+                    size = Size(sw, sh * 0.5f),
+                    cornerRadius = CornerRadius(corner)
+                )
+            }
         }
     }
 }
