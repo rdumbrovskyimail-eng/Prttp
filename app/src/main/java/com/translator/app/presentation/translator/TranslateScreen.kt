@@ -300,6 +300,7 @@ private fun EmptyState(palette: AppPalette, isActive: Boolean) {
 private fun PairsList(palette: AppPalette, pairs: List<TranslationPair>) {
     val listState = rememberLazyListState()
     val lastPair = pairs.lastOrNull()
+    val isGem = palette.id == AppThemeId.GEM
 
     androidx.compose.runtime.LaunchedEffect(
         pairs.size,
@@ -312,11 +313,13 @@ private fun PairsList(palette: AppPalette, pairs: List<TranslationPair>) {
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        contentPadding = PaddingValues(
+            horizontal = 16.dp,
+            vertical = if (isGem) 10.dp else 20.dp     // меньше вертикальный padding
+        ),
+        verticalArrangement = Arrangement.spacedBy(if (isGem) 8.dp else 14.dp)  // меньше отступ между карточками
     ) {
         items(pairs, key = { it.id }) { pair ->
-            // MessageReveal оборачивает каждую карточку в выбранный стиль
             MessageReveal(itemKey = pair.id) {
                 PairCard(palette, pair)
             }
@@ -329,31 +332,33 @@ private fun PairCard(palette: AppPalette, pair: TranslationPair) {
     val isGem = palette.id == AppThemeId.GEM
     val shadowSpot = if (palette.isDark) Color.Black.copy(alpha = 0.5f) else Color(0x14000000)
 
-    val cardPadding = if (isGem) 10.dp else 18.dp
-    val cardSpacing = if (isGem) 6.dp else 14.dp
+    // GEM: компактнее в ~1.7×, чтобы 3 карточки помещались там же, где раньше 2
+    val cardPadding = if (isGem) 8.dp else 18.dp
+    val cardSpacing = if (isGem) 4.dp else 14.dp
+    val cardCorner = if (isGem) 14.dp else 24.dp
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .shadow(
-                elevation = if (palette.isDark) 0.dp else if (isGem) 2.dp else 8.dp,
-                shape = RoundedCornerShape(if (isGem) 18.dp else 24.dp),
+                elevation = when {
+                    palette.isDark -> 0.dp
+                    isGem -> 1.dp
+                    else -> 8.dp
+                },
+                shape = RoundedCornerShape(cardCorner),
                 spotColor = shadowSpot
             )
-            .clip(RoundedCornerShape(if (isGem) 18.dp else 24.dp))
+            .clip(RoundedCornerShape(cardCorner))
             .background(palette.surfaceElevated)
             .then(
                 when {
-                    isGem -> Modifier.border(
-                        1.dp, palette.border, RoundedCornerShape(18.dp)
-                    )
-                    palette.isDark -> Modifier.border(
-                        1.dp, palette.border, RoundedCornerShape(24.dp)
-                    )
+                    isGem -> Modifier.border(1.dp, palette.border, RoundedCornerShape(cardCorner))
+                    palette.isDark -> Modifier.border(1.dp, palette.border, RoundedCornerShape(cardCorner))
                     else -> Modifier
                 }
             )
-            .padding(cardPadding),
+            .padding(horizontal = cardPadding, vertical = if (isGem) 6.dp else cardPadding),
         verticalArrangement = Arrangement.spacedBy(cardSpacing)
     ) {
         TranscriptBlock(
@@ -362,7 +367,8 @@ private fun PairCard(palette: AppPalette, pair: TranslationPair) {
             lang = pair.originalLang,
             isOriginal = true,
             isFinal = pair.originalIsFinal,
-            isRefined = pair.originalIsRefined
+            isRefined = pair.originalIsRefined,
+            compact = isGem
         )
         if (isGem) {
             Box(
@@ -385,7 +391,8 @@ private fun PairCard(palette: AppPalette, pair: TranslationPair) {
             lang = pair.translationLang,
             isOriginal = false,
             isFinal = pair.translationIsFinal,
-            isRefined = pair.translationIsRefined
+            isRefined = pair.translationIsRefined,
+            compact = isGem
         )
     }
 }
@@ -397,7 +404,8 @@ private fun TranscriptBlock(
     lang: String,
     isOriginal: Boolean,
     isFinal: Boolean,
-    isRefined: Boolean
+    isRefined: Boolean,
+    compact: Boolean = false              // ★ NEW
 ) {
     Column(modifier = Modifier.animateContentSize(spring(stiffness = Spring.StiffnessMediumLow))) {
         Row(
@@ -407,29 +415,36 @@ private fun TranscriptBlock(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
-                    modifier = Modifier.size(6.dp).clip(CircleShape)
+                    modifier = Modifier.size(if (compact) 5.dp else 6.dp).clip(CircleShape)
                         .background(if (isOriginal) palette.textMuted else palette.accentPrimary)
                 )
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(if (compact) 6.dp else 8.dp))
                 Text(
                     text = lang.ifBlank { "—" }.uppercase(),
-                    fontSize = 11.sp, fontWeight = FontWeight.W700,
-                    letterSpacing = 1.5.sp, color = palette.textSecondary
+                    fontSize = if (compact) 10.sp else 11.sp,
+                    fontWeight = FontWeight.W700,
+                    letterSpacing = 1.4.sp, color = palette.textSecondary
                 )
             }
             StatusDot(palette = palette, isFinal = isFinal, isRefined = isRefined)
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(if (compact) 2.dp else 6.dp))
         if (text.isBlank() && !isFinal) {
             ShimmerPlaceholder(palette = palette)
         } else {
-            // typewriterText: если активен Typewriter reveal — текст постепенно раскрывается.
-            // Для остальных стилей возвращает строку как есть.
             val displayed = typewriterText(text)
             Text(
                 text = displayed,
-                fontSize = if (isOriginal) 15.sp else 18.sp,
-                lineHeight = if (isOriginal) 22.sp else 26.sp,
+                fontSize = if (compact) {
+                    if (isOriginal) 13.sp else 15.sp
+                } else {
+                    if (isOriginal) 15.sp else 18.sp
+                },
+                lineHeight = if (compact) {
+                    if (isOriginal) 17.sp else 19.sp
+                } else {
+                    if (isOriginal) 22.sp else 26.sp
+                },
                 color = if (isOriginal) palette.textSecondary else palette.textPrimary,
                 fontWeight = if (isOriginal) FontWeight.Normal else FontWeight.W500
             )
@@ -487,9 +502,10 @@ private fun BottomControlPanel(
         modifier = Modifier.fillMaxWidth().padding(bottom = 28.dp, top = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Слот анимации — фиксированной высоты, чтобы layout не дёргался.
+        // Слот анимации: для GEM — большое поле 320dp, для остальных тем — 150dp
+        val animSlotHeight = if (palette.id == AppThemeId.GEM) 320.dp else 150.dp
         Box(
-            modifier = Modifier.fillMaxWidth().height(150.dp),
+            modifier = Modifier.fillMaxWidth().height(animSlotHeight),
             contentAlignment = Alignment.Center
         ) {
             androidx.compose.animation.AnimatedVisibility(
@@ -513,7 +529,12 @@ private fun BottomControlPanel(
                         AppThemeId.OBSIDIAN     -> ObsidianOrb(palette, audioFlow, isAiSpeaking || isMicActive)
                         AppThemeId.OPEN_OASIS   -> GptFluidVoice(palette, audioFlow, isAiSpeaking || isMicActive)
                         AppThemeId.GEMINI_NEXUS -> GeminiMeshAura(palette, audioFlow, isAiSpeaking || isMicActive)
-                        AppThemeId.GEM          -> GemInkBloom(palette, audioFlow, isAiSpeaking || isMicActive)
+                        AppThemeId.GEM          -> GemInkBloom(
+                            palette = palette,
+                            audioFlow = audioFlow,
+                            isAiSpeaking = isAiSpeaking || isMicActive,
+                            modifier = Modifier.fillMaxSize()    // ★ занимает ВЕСЬ слот 320dp
+                        )
                     }
                 }
             }
