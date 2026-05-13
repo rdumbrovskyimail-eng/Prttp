@@ -14,6 +14,10 @@
 //       но ТОЛЬКО если RECORD_AUDIO разрешен (иначе ждём действия пользователя)
 //   [+] Interrupted делает audioEngine.flushPlayback() (мгновенный сброс
 //       audio buffer при перебивании)
+//
+// ПРОМПТ 12:
+//   [+] Обработка SessionHandleUpdate и GoAway в observeGeminiEvents()
+//   [+] connectInternal() передаёт sessionHandle для transparent reconnect
 // ═══════════════════════════════════════════════════════════
 package com.translator.app.presentation.translator
 
@@ -170,7 +174,9 @@ class TranslatorViewModel @Inject constructor(
     }
 
     private suspend fun connectInternal() {
-        val config = TranslatorSession.buildConfig(cachedSettings)
+        val baseConfig = TranslatorSession.buildConfig(cachedSettings)
+        // Передаём sessionHandle если он есть — для transparent reconnect
+        val config = baseConfig.copy(sessionHandle = liveClient.sessionHandle)
         runCatching {
             liveClient.connect(activeApiKey, config, logRaw = cachedSettings.logRawWebSocketFrames)
         }.onFailure { e ->
@@ -340,6 +346,16 @@ class TranslatorViewModel @Inject constructor(
                                 )
                             }
                         }
+                    }
+                    is GeminiEvent.SessionHandleUpdate -> {
+                        // Запоминаем handle для возможного reconnect.
+                        // liveClient.sessionHandle уже обновлён внутри клиента.
+                        logger.d("Session handle updated, resumable=${event.resumable}")
+                    }
+                    is GeminiEvent.GoAway -> {
+                        logger.w("Server will close soon: timeLeft=${event.timeLeft}")
+                        // На GoAway мы НЕ инициируем reconnect преждевременно —
+                        // ждём Disconnected, иначе двойное подключение.
                     }
                     is GeminiEvent.Disconnected -> {
                         _state.update {
