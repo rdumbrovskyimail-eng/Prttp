@@ -314,6 +314,10 @@ class GeminiLiveClient(
                         add(JsonPrimitive(config.responseModality))
                     })
 
+                    if (config.mediaResolution.isNotBlank()) {
+                        put("mediaResolution", config.mediaResolution)
+                    }
+
                     if (config.sendGenerationParams) {
                         put("temperature", config.temperature)
                         put("topP", config.topP)
@@ -432,11 +436,6 @@ class GeminiLiveClient(
                             }
                         })
                     })
-                }
-
-                // ─── mediaResolution (корневой уровень) ───
-                if (config.mediaResolution.isNotBlank()) {
-                    put("mediaResolution", config.mediaResolution)
                 }
             })
         }
