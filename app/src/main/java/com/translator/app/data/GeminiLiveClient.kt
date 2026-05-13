@@ -314,15 +314,15 @@ class GeminiLiveClient(
                         add(JsonPrimitive(config.responseModality))
                     })
 
-                    if (config.mediaResolution.isNotBlank()) {
-                        put("mediaResolution", config.mediaResolution)
-                    }
-
                     if (config.sendGenerationParams) {
                         put("temperature", config.temperature)
                         put("topP", config.topP)
                         if (config.topK > 0) put("topK", config.topK)
                         put("maxOutputTokens", config.maxOutputTokens)
+                    }
+
+                    if (config.mediaResolution.isNotBlank()) {
+                        put("mediaResolution", config.mediaResolution)
                     }
 
                     if (config.responseModality == "AUDIO") {
