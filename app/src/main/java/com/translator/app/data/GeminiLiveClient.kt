@@ -63,9 +63,10 @@ class GeminiLiveClient(
         isLenient = true
     }
 
+    // 1.8: ping interval changed from 30 to 60 seconds
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
-        .pingInterval(30, TimeUnit.SECONDS)
+        .pingInterval(60, TimeUnit.SECONDS)
         .build()
 
     private val internalScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -89,6 +90,9 @@ class GeminiLiveClient(
 
     @Volatile
     private var logRawFrames: Boolean = false
+
+    // 1.9: silent drop counter for diagnostics
+    @Volatile private var droppedAudioChunks: Long = 0L
 
     private var currentConfig: SessionConfig? = null
 
@@ -118,6 +122,7 @@ class GeminiLiveClient(
         currentConfig = config
         logRawFrames = logRaw
         isReady = false
+        droppedAudioChunks = 0L  // 1.9: reset drop counter on new connection
         synchronized(lastSentFrames) { lastSentFrames.clear() }
         closeCompletion = CompletableDeferred()
 
@@ -314,15 +319,17 @@ class GeminiLiveClient(
                         add(JsonPrimitive(config.responseModality))
                     })
 
+                    // 1.1: mediaResolution moved here from root-level setup
+                    if (config.mediaResolution.isNotBlank()) {
+                        put("mediaResolution", config.mediaResolution)
+                    }
+
+                    // 1.2: only temperature, topP, topK, maxOutputTokens — no presencePenalty/frequencyPenalty
                     if (config.sendGenerationParams) {
                         put("temperature", config.temperature)
                         put("topP", config.topP)
                         if (config.topK > 0) put("topK", config.topK)
                         put("maxOutputTokens", config.maxOutputTokens)
-                    }
-
-                    if (config.mediaResolution.isNotBlank()) {
-                        put("mediaResolution", config.mediaResolution)
                     }
 
                     if (config.responseModality == "AUDIO") {
@@ -338,7 +345,7 @@ class GeminiLiveClient(
                         })
                     }
 
-                    // Off (thinkingLevel == null) → блок не шлём вообще, модель работает 
+                    // Off (thinkingLevel == null) → блок не шлём вообще, модель работает
                     // в максимально быстром режиме без обдумывания.
                     val thinkingLevel = config.latencyProfile.thinkingLevel
                     if (config.sendThinkingConfig && thinkingLevel != null) {
@@ -412,10 +419,9 @@ class GeminiLiveClient(
                     }
                 }
 
-                // ─── History Config (Обязательно для Gemini 3.1) ───
-                put("historyConfig", buildJsonObject {
-                    put("initialHistoryInClientContent", true)
-                })
+                // 1.3: historyConfig block removed — it only makes sense when seeding
+                // clientContent.turns as the first message, which this client doesn't do.
+                // Setting it unconditionally can trigger close code 1007 on v1beta.
 
                 // ─── Session Resumption ───
                 if (config.sendSessionResumptionConfig && config.enableSessionResumption) {
@@ -492,6 +498,11 @@ class GeminiLiveClient(
 
     override fun sendAudio(chunk: AudioChunk) {
         if (!isReady) {
+            // 1.9: silent drop counter
+            droppedAudioChunks++
+            if (droppedAudioChunks % 50L == 0L) {
+                logger.w("Dropped $droppedAudioChunks audio chunks (session not ready)")
+            }
             chunk.release()
             return
         }
@@ -507,25 +518,12 @@ class GeminiLiveClient(
         }
     }
 
+    // 1.4: sendText now delegates to sendRealtimeText.
+    // In Gemini 3.1 Flash Live, text in an active dialogue is sent via
+    // realtimeInput.text. clientContent is reserved only for seeding initial
+    // history (before the first model turn) — for that, use restoreContext().
     override fun sendText(text: String) {
-        if (!isReady) return
-        val msg = buildJsonObject {
-            put("clientContent", buildJsonObject {
-                put("turns", buildJsonArray {
-                    add(buildJsonObject {
-                        put("role", "user")
-                        put("parts", buildJsonArray {
-                            add(buildJsonObject { put("text", text) })
-                        })
-                    })
-                })
-                put("turnComplete", true)
-            })
-        }
-        val raw = msg.toString()
-        logger.d("TEXT → (${text.length} chars, clientContent)")
-        trackSentFrame(raw)
-        webSocket?.send(raw)
+        sendRealtimeText(text)
     }
 
     override fun sendRealtimeText(text: String) {
@@ -552,6 +550,23 @@ class GeminiLiveClient(
         if (!isReady) return
         val raw = """{"realtimeInput":{"audioStreamEnd":true}}"""
         logger.d("AUDIO_STREAM_END →")
+        trackSentFrame(raw)
+        webSocket?.send(raw)
+    }
+
+    // 1.7: manual VAD methods for when autoActivityDetection = false
+    override fun sendActivityStart() {
+        if (!isReady) return
+        val raw = """{"realtimeInput":{"activityStart":{}}}"""
+        logger.d("ACTIVITY_START →")
+        trackSentFrame(raw)
+        webSocket?.send(raw)
+    }
+
+    override fun sendActivityEnd() {
+        if (!isReady) return
+        val raw = """{"realtimeInput":{"activityEnd":{}}}"""
+        logger.d("ACTIVITY_END →")
         trackSentFrame(raw)
         webSocket?.send(raw)
     }
@@ -590,8 +605,13 @@ class GeminiLiveClient(
         webSocket?.send(raw)
     }
 
+    // 1.5: added isReady guard; turnComplete set to false — this is history seeding, not an active turn
     override fun restoreContext(history: List<ConversationMessage>) {
         if (history.isEmpty()) return
+        if (!isReady) {
+            logger.w("restoreContext skipped — session not ready")
+            return
+        }
         val msg = buildJsonObject {
             put("clientContent", buildJsonObject {
                 put("turns", buildJsonArray {
@@ -604,11 +624,12 @@ class GeminiLiveClient(
                         })
                     }
                 })
-                put("turnComplete", true)
+                // НЕ ставим turnComplete — это history seeding, не активный ход
+                put("turnComplete", false)
             })
         }
         val raw = msg.toString()
-        logger.d("CONTEXT RESTORE → ${history.size} messages (${raw.length} chars)")
+        logger.d("CONTEXT SEED → ${history.size} messages (${raw.length} chars)")
         trackSentFrame(raw)
         webSocket?.send(raw)
     }
@@ -672,8 +693,9 @@ class GeminiLiveClient(
 
             root["usageMetadata"]?.jsonObject?.let { usage ->
                 val prompt = usage["promptTokenCount"]?.jsonPrimitive?.intOrNull ?: 0
-                val resp = (usage["candidatesTokenCount"]
-                    ?: usage["responseTokenCount"])?.jsonPrimitive?.intOrNull ?: 0
+                // 1.6: responseTokenCount is the correct Live API field name; candidatesTokenCount is generateContent API
+                val resp = (usage["responseTokenCount"]
+                    ?: usage["candidatesTokenCount"])?.jsonPrimitive?.intOrNull ?: 0
                 val total = usage["totalTokenCount"]?.jsonPrimitive?.intOrNull ?: 0
                 _events.tryEmit(
                     GeminiEvent.UsageMetadata(
