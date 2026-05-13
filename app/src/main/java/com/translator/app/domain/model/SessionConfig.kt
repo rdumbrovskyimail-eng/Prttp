@@ -39,16 +39,23 @@ data class SessionConfig(
     val model: String = DEFAULT_MODEL,
 
     // ── Generation Config ──
+    // 3.1: presencePenalty и frequencyPenalty удалены — не поддерживаются Live API
     val responseModality: String = "AUDIO",
     val temperature: Float = 1.0f,
     val topP: Float = 0.95f,
     val topK: Int = 0,
     val maxOutputTokens: Int = 8192,
-    val presencePenalty: Float = 0.0f,
-    val frequencyPenalty: Float = 0.0f,
 
     // ── Speech Config ──
     val voiceId: String = "Aoede",
+
+    /**
+     * BCP-47 код языка для speechConfig.languageCode.
+     * ВНИМАНИЕ: native audio output модели (gemini-3.1-flash-live-preview)
+     * АВТОМАТИЧЕСКИ выбирают язык и игнорируют это поле.
+     * Оставлено для совместимости и для legacy моделей.
+     * Для translator-режима оставляй пустым.
+     */
     val languageCode: String = "",
 
     // ── Thinking Config ──
@@ -58,11 +65,29 @@ data class SessionConfig(
     // ── Media Resolution ──
     val mediaResolution: String = "",
 
+    /**
+     * Поведение при обнаружении активности пользователя.
+     * START_OF_ACTIVITY_INTERRUPTS (default) — старт речи прерывает модель (barge-in).
+     * NO_INTERRUPTION — модель не прерывается.
+     */
+    val activityHandling: String = "START_OF_ACTIVITY_INTERRUPTS",
+
+    /**
+     * Что входит в "ход" пользователя:
+     *  TURN_INCLUDES_ONLY_ACTIVITY        — только обнаруженная речь
+     *  TURN_INCLUDES_ALL_INPUT            — всё аудио включая тишину
+     *  TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO — речь + все видеокадры (default в 3.1)
+     *
+     * Для translator-режима без видео — TURN_INCLUDES_ONLY_ACTIVITY экономит токены.
+     */
+    val turnCoverage: String = "TURN_INCLUDES_ONLY_ACTIVITY",
+
     // ── VAD ──
     val autoActivityDetection: Boolean = true,
-    val vadStartSensitivity: String = "START_SENSITIVITY_LOW",
-    val vadEndSensitivity: String = "END_SENSITIVITY_LOW",
-    val vadPrefixPaddingMs: Int = 150,
+    // 3.3: HIGH sensitivity для быстрого старта/конца распознавания речи
+    val vadStartSensitivity: String = "START_SENSITIVITY_HIGH",
+    val vadEndSensitivity: String = "END_SENSITIVITY_HIGH",
+    val vadPrefixPaddingMs: Int = 20,
     val vadSilenceDurationMs: Int = 400,
 
     // ── System Instruction ──
@@ -79,12 +104,13 @@ data class SessionConfig(
     val transcriptionLanguageCodes: List<String> = emptyList(),
 
     // ── Session Management ──
+    // 3.4: оба включены по дефолту согласно best practices
     val enableSessionResumption: Boolean = true,
-    val transparentResumption: Boolean = true,
+    // 3.5: transparentResumption удалён — не существует в официальной спецификации
     val sessionHandle: String? = null,
     val enableContextCompression: Boolean = true,
-    val compressionTriggerTokens: Long = 0L,
-    val compressionTargetTokens: Long = 0L,
+    val compressionTriggerTokens: Long = 25_600L,  // 80% от 32k window
+    val compressionTargetTokens: Long = 12_800L,   // 50% — оставляем место для нового хода
 
     // ── Tools ──
     val enableGoogleSearch: Boolean = false,
@@ -122,9 +148,11 @@ data class SessionConfig(
     val sendTranscriptionConfig: Boolean = true,
 
     /** Отправлять ли sessionResumption */
+    // 3.4: true по дефолту
     val sendSessionResumptionConfig: Boolean = true,
 
     /** Отправлять ли contextWindowCompression */
+    // 3.4: true по дефолту
     val sendContextCompressionConfig: Boolean = true,
 
     /** Логировать ПОЛНЫЙ JSON setup (длинный!) */
