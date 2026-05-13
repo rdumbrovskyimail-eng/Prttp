@@ -16,35 +16,52 @@ Ru - De . De - Ru ."""
 
         return SessionConfig(
             model = settings.model,
-            // Translator-fixed как в старой версии (быстрая реакция, минимум отсебятины)
-            temperature = 1.0f,
-            topP = 0.95f,
-            topK = 0,
-            maxOutputTokens = 8192,
+
+            // Generation: дефолты Gemini 3 (temperature = 1.0!)
+            temperature = settings.temperature,
+            topP = settings.topP,
+            topK = 0,  // Live API: не шлём, не нужно
+            maxOutputTokens = settings.maxOutputTokens,
+
+            // Voice
             voiceId = settings.voiceId,
-            languageCode = "",  // Translator: пусто — Gemini сам определяет язык RU/DE
+            languageCode = "",  // gemini-3.1-flash-live-preview игнорирует это поле
+
             responseModality = "AUDIO",
             latencyProfile = latencyProfile,
+            thinkingIncludeThoughts = settings.includeThoughts,
+
+            // Transcription
             inputTranscription = settings.inputTranscription,
             outputTranscription = settings.outputTranscription,
+            transcriptionLanguageCodes = settings.transcriptionLanguageCodes,
+
+            // VAD (translator-tuned)
             autoActivityDetection = settings.enableServerVad,
-            // Translator-tuned VAD: HIGH старт (быстро ловит тихую речь),
-            // LOW конец (даёт договорить), 500ms silence, 150ms prefix.
             vadStartSensitivity = settings.vadStartSensitivity,
             vadEndSensitivity = settings.vadEndSensitivity,
             vadSilenceDurationMs = settings.vadSilenceDurationMs,
-            vadPrefixPaddingMs = 150,  // КРИТИЧНО для скорости: 150мс preroll
-            sendAudioStreamEnd = settings.sendAudioStreamEnd,
+            vadPrefixPaddingMs = settings.vadPrefixPaddingMs,
+            activityHandling = settings.activityHandling,
+            turnCoverage = settings.turnCoverage,
+
+            sendAudioStreamEnd = true,
+
             systemInstruction = SYSTEM_INSTRUCTION,
-            // Translator: НЕ шлём resumption/compression блоки — они только увеличивают latency
-            enableSessionResumption = false,
-            transparentResumption = false,
-            sendSessionResumptionConfig = false,
-            enableContextCompression = false,
-            sendContextCompressionConfig = false,
+
+            // Session: ВКЛЮЧАЕМ resumption и compression — это best practice
+            enableSessionResumption = settings.enableSessionResumption,
+            sendSessionResumptionConfig = settings.enableSessionResumption,
+            enableContextCompression = settings.enableContextCompression,
+            sendContextCompressionConfig = settings.enableContextCompression,
+            compressionTriggerTokens = settings.compressionTriggerTokens,
+            compressionTargetTokens = settings.compressionTargetTokens,
+
             sendTranscriptionConfig = true,
             enableGoogleSearch = false,
             functionDeclarations = emptyList(),
+
+            // Debug
             logFullSetupJson = settings.logRawWebSocketFrames
         )
     }
