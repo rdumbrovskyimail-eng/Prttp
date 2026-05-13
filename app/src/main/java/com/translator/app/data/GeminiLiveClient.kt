@@ -403,6 +403,8 @@ class GeminiLiveClient(
                                 put("silenceDurationMs", config.vadSilenceDurationMs)
                             }
                         })
+                        put("activityHandling", config.activityHandling)
+                        put("turnCoverage", config.turnCoverage)
                     })
                 }
 
