@@ -415,11 +415,9 @@ class AndroidAudioEngine(
             val sample = (high shl 8) or low
             val signed = if (sample and 0x8000 != 0) sample or 0xFFFF0000.toInt() else sample
             
-            // Быстрый Soft Clipper (x - x^3/3)
-            var x = (signed / 32768f) * boost
-            x = x.coerceIn(-1.5f, 1.5f)
-            var soft = x - (x * x * x) / 3f
-            soft = soft.coerceIn(-1f, 1f)
+            // Идеальный клиппер без искажений
+            val x = (signed / 32768f) * boost
+            val soft = x / (1f + kotlin.math.abs(x))
             
             val clipped = (soft * 32760f).toInt()
             out[i] = (clipped and 0xFF).toByte()
