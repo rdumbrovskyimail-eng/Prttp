@@ -108,8 +108,9 @@ class TranslatorViewModel @Inject constructor(
                 return@launch
             }
             activeApiKey = settings.apiKey
+            _state.value.pairs.clear()
             _state.update {
-                it.copy(connectionStatus = ConnectionStatus.Connecting, pairs = emptyList(), error = null)
+                it.copy(connectionStatus = ConnectionStatus.Connecting, error = null)
             }
             currentOpenPairId = null
             reconnectAttempt.set(0L)
