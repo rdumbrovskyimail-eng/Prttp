@@ -101,7 +101,7 @@ class GeminiLiveClient(
 
     override suspend fun connect(apiKey: String, config: SessionConfig, logRaw: Boolean) {
         connectionMutex.withLock {
-            if (webSocket != null) disconnect()
+            if (webSocket != null) internalDisconnect()
 
             currentConfig = config
             logRawFrames = logRaw
@@ -182,22 +182,26 @@ class GeminiLiveClient(
     }
 
     private fun cancelSetupWatchdog() { setupWatchdog?.cancel(); setupWatchdog = null }
+
+    private suspend fun internalDisconnect() {
+        cancelSetupWatchdog()
+        val ws = webSocket
+        if (ws == null) { isReady = false; return }
+        val completion = closeCompletion
+        runCatching { ws.close(1000, "bye") }
+        if (completion != null && !completion.isCompleted) {
+            withTimeoutOrNull(2000L) { completion.await() }
+        }
+        webSocket = null
+        isReady = false
+        closeCompletion = null
+        // Любые stale-chunki после disconnect игнорируются.
+        activeTurnId = currentTurnId.incrementAndGet()
+    }
     
     override suspend fun disconnect() {
         connectionMutex.withLock {
-            cancelSetupWatchdog()
-            val ws = webSocket
-            if (ws == null) { isReady = false; return@withLock }
-            val completion = closeCompletion
-            runCatching { ws.close(1000, "bye") }
-            if (completion != null && !completion.isCompleted) {
-                withTimeoutOrNull(2000L) { completion.await() }
-            }
-            webSocket = null
-            isReady = false
-            closeCompletion = null
-            // Любые stale-chunki после disconnect игнорируются.
-            activeTurnId = currentTurnId.incrementAndGet()
+            internalDisconnect()
         }
     }
 
