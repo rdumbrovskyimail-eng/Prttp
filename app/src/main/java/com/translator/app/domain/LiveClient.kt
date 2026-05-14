@@ -14,8 +14,6 @@ interface LiveClient {
     fun sendAudio(chunk: MicAudioChunk)
     fun sendRealtimeText(text: String)
     fun sendAudioStreamEnd()
-    fun sendActivityStart()
-    fun sendActivityEnd()
     fun sendTurnComplete()
     fun sendToolResponse(responses: List<ToolResponse>)
     suspend fun disconnect()
