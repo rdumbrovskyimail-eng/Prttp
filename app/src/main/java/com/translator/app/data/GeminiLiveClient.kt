@@ -276,13 +276,7 @@ class GeminiLiveClient(
 
             // ─── Транскрипция ───
             if (config.inputTranscription) {
-                put("inputAudioTranscription", buildJsonObject {
-                    if (config.transcriptionLanguageCodes.isNotEmpty()) {
-                        put("languageCodes", buildJsonArray {
-                            config.transcriptionLanguageCodes.forEach { add(JsonPrimitive(it)) }
-                        })
-                    }
-                })
+                put("inputAudioTranscription", buildJsonObject {})
             }
             if (config.outputTranscription) {
                 put("outputAudioTranscription", buildJsonObject {})
