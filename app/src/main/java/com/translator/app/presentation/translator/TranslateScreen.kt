@@ -99,7 +99,7 @@ import com.translator.app.presentation.theme.LocalAppPalette
 import com.translator.app.presentation.translator.animations.GemInkBloom
 import com.translator.app.presentation.translator.animations.ObsidianOrb
 import com.translator.app.presentation.translator.animations.SakuraRipples
-import com.translator.app.presentation.translator.components.LanguagePairSelector
+import com.translator.app.presentation.translator.LanguagePairSelector
 import com.translator.app.presentation.translator.reveal.MessageReveal
 import com.translator.app.presentation.translator.reveal.typewriterText
 import kotlinx.coroutines.flow.Flow
