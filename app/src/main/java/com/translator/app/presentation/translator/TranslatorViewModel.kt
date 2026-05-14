@@ -21,6 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -165,10 +166,10 @@ class TranslatorViewModel @Inject constructor(
 
     fun stopSession() {
         viewModelScope.launch {
-            reconnectJob?.cancel(); reconnectJob = null
+            reconnectJob?.cancelAndJoin(); reconnectJob = null
             reconnectAttempt.set(0L)
 
-            micJob?.cancel(); micJob = null
+            micJob?.cancelAndJoin(); micJob = null
             audioEngine.stopCapture()
             liveClient.disconnect()
             stopForegroundServiceSafe()
