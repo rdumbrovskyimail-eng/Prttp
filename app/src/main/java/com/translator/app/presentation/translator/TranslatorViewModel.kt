@@ -38,7 +38,7 @@ data class TranslatorState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.Disconnected,
     val isMicActive: Boolean = false,
     val isAiSpeaking: Boolean = false,
-    val pairs: androidx.compose.runtime.snapshots.SnapshotStateList<TranslationPair> = androidx.compose.runtime.mutableStateListOf(),
+    val pairs: List<TranslationPair> = emptyList(),
     val error: String? = null,
     val promptTokens: Int = 0,
     val responseTokens: Int = 0,
@@ -77,8 +77,6 @@ class TranslatorViewModel @Inject constructor(
     @Volatile private var activeApiKey: String = ""
     @Volatile private var fgsStarted: Boolean = false
 
-    private val pairMutex = Mutex()
-
     // Был ли потерян интернет — для немедленного реконнекта при восстановлении.
     private val networkLost = AtomicBoolean(false)
 
@@ -108,9 +106,8 @@ class TranslatorViewModel @Inject constructor(
                 return@launch
             }
             activeApiKey = settings.apiKey
-            _state.value.pairs.clear()
             _state.update {
-                it.copy(connectionStatus = ConnectionStatus.Connecting, error = null)
+                it.copy(connectionStatus = ConnectionStatus.Connecting, error = null, pairs = emptyList())
             }
             currentOpenPairId = null
             reconnectAttempt.set(0L)
@@ -359,19 +356,17 @@ class TranslatorViewModel @Inject constructor(
         }
     }
 
-    private suspend fun finalizeOpenPair() {
-        pairMutex.withLock {
-            val openId = currentOpenPairId ?: return@withLock
-            val idx = _state.value.pairs.indexOfFirst { it.id == openId }
-            if (idx >= 0) {
-                val p = _state.value.pairs[idx]
-                _state.value.pairs[idx] = p.copy(
+    private fun finalizeOpenPair() {
+        val openId = currentOpenPairId ?: return
+        _state.update { state ->
+            state.copy(pairs = state.pairs.map {
+                if (it.id == openId) it.copy(
                     originalIsFinal = true, translationIsFinal = true,
                     originalIsRefined = true, translationIsRefined = true
-                )
-            }
-            currentOpenPairId = null
+                ) else it
+            })
         }
+        currentOpenPairId = null
     }
 
     private fun scheduleReconnect() {
@@ -402,20 +397,18 @@ class TranslatorViewModel @Inject constructor(
         }
     }
 
-    private suspend fun openNewPair(): Long = pairMutex.withLock {
+    private fun openNewPair(): Long {
         val id = nextPairId++
         currentOpenPairId = id
-        _state.value.pairs.add(TranslationPair(id = id))
-        id
+        _state.update { it.copy(pairs = it.pairs + TranslationPair(id = id)) }
+        return id
     }
 
-    private suspend fun updatePair(id: Long, transform: (TranslationPair) -> TranslationPair) =
-        pairMutex.withLock {
-            val idx = _state.value.pairs.indexOfFirst { it.id == id }
-            if (idx >= 0) {
-                _state.value.pairs[idx] = transform(_state.value.pairs[idx])
-            }
+    private fun updatePair(id: Long, transform: (TranslationPair) -> TranslationPair) {
+        _state.update { state ->
+            state.copy(pairs = state.pairs.map { if (it.id == id) transform(it) else it })
         }
+    }
 
     private fun detectLang(text: String): String {
         if (text.isBlank()) return ""
@@ -426,7 +419,7 @@ class TranslatorViewModel @Inject constructor(
     private fun startStuckTurnWatchdog() {
         stuckTurnWatchdogJob?.cancel()
         stuckTurnWatchdogJob = viewModelScope.launch {
-            delay(5000)
+            delay(3000)
             val now = System.currentTimeMillis()
             val lastT = lastAiAudioChunkAtMs.get()
             val sinceLast = now - lastT
