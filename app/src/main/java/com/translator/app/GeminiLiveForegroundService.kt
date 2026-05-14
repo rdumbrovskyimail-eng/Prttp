@@ -15,17 +15,6 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import dagger.hilt.android.AndroidEntryPoint
 
-/**
- * Foreground Service для непрерывной работы голосовой сессии.
- *
- * КРИТИЧЕСКИЕ ФИКСЫ:
- *   [1] Если intent==null или action неизвестен — ВСЁ РАВНО вызываем
- *       startForeground(dummy notification) до stopSelf(). Это требование
- *       Android 12+ FGS контракта — иначе ForegroundServiceDidNotStartInTimeException.
- *   [2] onTaskRemoved: корректная остановка при свайпе приложения.
- *   [3] Android 31+: используем AudioManager.setCommunicationDevice (стабильнее).
- *   [4] Android 26+ обязателен NotificationChannel ДО любой отправки.
- */
 @AndroidEntryPoint
 class GeminiLiveForegroundService : Service() {
 
@@ -60,8 +49,12 @@ class GeminiLiveForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // ═══ ВСЕГДА startForeground() сначала, ДО любых проверок — иначе FGS contract violated ═══
-        startForegroundSafe()
+        // ВСЕГДА startForeground в первую очередь.
+        if (!startForegroundSafe()) {
+            // Не удалось — нет смысла продолжать (Android 14+ может запретить mic-FGS из фона).
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         when (intent?.action) {
             ACTION_START -> {
@@ -76,8 +69,6 @@ class GeminiLiveForegroundService : Service() {
                 stopSelf()
             }
             else -> {
-                // intent == null (rescheduled by system) или неизвестный action.
-                // Мы ДОЛЖНЫ были вызвать startForeground (сделано выше), теперь можно stopSelf.
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -85,8 +76,8 @@ class GeminiLiveForegroundService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startForegroundSafe() {
-        try {
+    private fun startForegroundSafe(): Boolean {
+        return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
                     NOTIFICATION_ID,
@@ -97,9 +88,10 @@ class GeminiLiveForegroundService : Service() {
             } else {
                 startForeground(NOTIFICATION_ID, buildNotification())
             }
-        } catch (e: Exception) {
-            // На некоторых OEM бывают нестандартные рестрикции — просто логируем.
-            android.util.Log.e("FGS", "startForeground failed: ${e.message}")
+            true
+        } catch (e: Throwable) {
+            android.util.Log.e("FGS", "startForeground failed: ${e.javaClass.simpleName}: ${e.message}")
+            false
         }
     }
 
@@ -109,9 +101,7 @@ class GeminiLiveForegroundService : Service() {
 
     private fun routeAudio(forceSpeaker: Boolean) {
         val am = audioManager ?: return
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Android 12+: современный API
             runCatching {
                 val devices = am.availableCommunicationDevices
                 val target: AudioDeviceInfo? = if (forceSpeaker) {
@@ -130,34 +120,15 @@ class GeminiLiveForegroundService : Service() {
             }
             return
         }
-
-        // ═══ Legacy (Android 8-11): старый путь ═══
         @Suppress("DEPRECATION")
-        val hasBtHeadset = runCatching {
-            am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
-                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
-                        it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
-            }
-        }.getOrDefault(false)
-
-        @Suppress("DEPRECATION")
-        if (!forceSpeaker && hasBtHeadset && am.isBluetoothScoAvailableOffCall) {
-            runCatching {
-                am.startBluetoothSco()
-                am.isBluetoothScoOn = true
-                bluetoothScoActive = true
-                am.mode = AudioManager.MODE_IN_COMMUNICATION
-            }
-        } else {
+        run {
             am.mode = AudioManager.MODE_NORMAL
-            @Suppress("DEPRECATION")
             am.isSpeakerphoneOn = true
         }
     }
 
     private fun releaseAudioRouting() {
         val am = audioManager ?: return
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (communicationDeviceSet) {
                 runCatching { am.clearCommunicationDevice() }
@@ -166,30 +137,16 @@ class GeminiLiveForegroundService : Service() {
             am.mode = AudioManager.MODE_NORMAL
             return
         }
-
         @Suppress("DEPRECATION")
-        run {
-            if (bluetoothScoActive) {
-                runCatching { am.stopBluetoothSco() }
-                am.isBluetoothScoOn = false
-            }
-            am.isSpeakerphoneOn = false
-            am.mode = AudioManager.MODE_NORMAL
-        }
-        bluetoothScoActive = false
+        run { am.isSpeakerphoneOn = false; am.mode = AudioManager.MODE_NORMAL }
     }
-
-    // ════════════════════════════════════════════════════════════
-    //  AUDIO FOCUS
-    // ════════════════════════════════════════════════════════════
 
     private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { /* no-op */ }
 
     @Suppress("DEPRECATION")
     private fun requestAudioFocus() {
         audioManager?.requestAudioFocus(
-            audioFocusListener,
-            AudioManager.STREAM_VOICE_CALL,
+            audioFocusListener, AudioManager.STREAM_VOICE_CALL,
             AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
         )
     }
@@ -199,31 +156,22 @@ class GeminiLiveForegroundService : Service() {
         audioManager?.abandonAudioFocus(audioFocusListener)
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  NOTIFICATION
-    // ════════════════════════════════════════════════════════════
-
     private fun buildNotification(): Notification {
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java),
+        val pi = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-
-        val stopPendingIntent = PendingIntent.getService(
+        val stopPi = PendingIntent.getService(
             this, 1,
-            Intent(this, GeminiLiveForegroundService::class.java).apply {
-                action = ACTION_STOP
-            },
+            Intent(this, GeminiLiveForegroundService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_IMMUTABLE
         )
-
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Gemini Live активен")
-            .setContentText("Голосовой ассистент слушает")
+            .setContentTitle("Translator активен")
+            .setContentText("Голосовой переводчик слушает")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentIntent(pendingIntent)
-            .addAction(android.R.drawable.ic_media_pause, "Стоп", stopPendingIntent)
+            .setContentIntent(pi)
+            .addAction(android.R.drawable.ic_media_pause, "Стоп", stopPi)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -233,21 +181,13 @@ class GeminiLiveForegroundService : Service() {
     private fun createNotificationChannel() {
         val nm = getSystemService(NotificationManager::class.java) ?: return
         if (nm.getNotificationChannel(CHANNEL_ID) != null) return
-
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "AI Assistant",
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = "Уведомление активной голосовой сессии"
+        val channel = NotificationChannel(CHANNEL_ID, "Translator",
+            NotificationManager.IMPORTANCE_LOW).apply {
+            description = "Активная голосовая сессия"
             setShowBadge(false)
         }
         nm.createNotificationChannel(channel)
     }
-
-    // ════════════════════════════════════════════════════════════
-    //  LIFECYCLE
-    // ════════════════════════════════════════════════════════════
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
