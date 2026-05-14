@@ -379,13 +379,21 @@ class AndroidAudioEngine(
                         for (buf in preBuffer) {
                             val boosted = applyPlaybackBoost(buf)
                             _playbackSync.tryEmit(boosted)
-                            runCatching { track.write(boosted, 0, boosted.size) }
+                            val written = track.write(boosted, 0, boosted.size)
+                            if (written < 0) {
+                                logger.e("AudioTrack write error: $written")
+                                break
+                            }
                         }
                         isFirstBatch = false
                     } else {
                         val boosted = applyPlaybackBoost(chunk)
                         _playbackSync.tryEmit(boosted)
-                        runCatching { track.write(boosted, 0, boosted.size) }
+                        val written = track.write(boosted, 0, boosted.size)
+                        if (written < 0) {
+                            logger.e("AudioTrack write error: $written")
+                            break
+                        }
                     }
 
                     if (awaitingDrain && playbackChannel.isEmpty) {
