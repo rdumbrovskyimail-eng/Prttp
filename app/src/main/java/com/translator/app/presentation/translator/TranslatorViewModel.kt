@@ -38,7 +38,7 @@ data class TranslatorState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.Disconnected,
     val isMicActive: Boolean = false,
     val isAiSpeaking: Boolean = false,
-    val pairs: List<TranslationPair> = emptyList(),
+    val pairs: androidx.compose.runtime.snapshots.SnapshotStateList<TranslationPair> = androidx.compose.runtime.mutableStateListOf(),
     val error: String? = null,
     val promptTokens: Int = 0,
     val responseTokens: Int = 0,
@@ -361,14 +361,13 @@ class TranslatorViewModel @Inject constructor(
     private suspend fun finalizeOpenPair() {
         pairMutex.withLock {
             val openId = currentOpenPairId ?: return@withLock
-            _state.update { s ->
-                val idx = s.pairs.indexOfFirst { it.id == openId }
-                if (idx < 0) return@update s
-                val finalized = s.pairs[idx].copy(
+            val idx = _state.value.pairs.indexOfFirst { it.id == openId }
+            if (idx >= 0) {
+                val p = _state.value.pairs[idx]
+                _state.value.pairs[idx] = p.copy(
                     originalIsFinal = true, translationIsFinal = true,
                     originalIsRefined = true, translationIsRefined = true
                 )
-                s.copy(pairs = s.pairs.toMutableList().apply { set(idx, finalized) })
             }
             currentOpenPairId = null
         }
@@ -405,17 +404,15 @@ class TranslatorViewModel @Inject constructor(
     private suspend fun openNewPair(): Long = pairMutex.withLock {
         val id = nextPairId++
         currentOpenPairId = id
-        _state.update { it.copy(pairs = it.pairs + TranslationPair(id = id)) }
+        _state.value.pairs.add(TranslationPair(id = id))
         id
     }
 
     private suspend fun updatePair(id: Long, transform: (TranslationPair) -> TranslationPair) =
         pairMutex.withLock {
-            _state.update { s ->
-                val idx = s.pairs.indexOfFirst { it.id == id }
-                if (idx < 0) return@update s
-                val nl = s.pairs.toMutableList().apply { set(idx, transform(s.pairs[idx])) }
-                s.copy(pairs = nl)
+            val idx = _state.value.pairs.indexOfFirst { it.id == id }
+            if (idx >= 0) {
+                _state.value.pairs[idx] = transform(_state.value.pairs[idx])
             }
         }
 
