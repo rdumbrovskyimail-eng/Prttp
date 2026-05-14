@@ -17,11 +17,13 @@ import com.translator.app.domain.model.GeminiEvent
 import com.translator.app.util.AppLogger
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -448,15 +450,14 @@ class TranslatorViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
-        // Синхронный shutdown — viewModelScope уже cancel'нут, нельзя через launch.
-        runCatching {
-            runBlocking {
+        GlobalScope.launch(Dispatchers.IO + NonCancellable) {
+            runCatching {
                 withTimeoutOrNull(1000L) {
                     audioEngine.stopCapture()
                     liveClient.disconnect()
                 }
             }
+            stopForegroundServiceSafe()
         }
-        stopForegroundServiceSafe()
     }
 }
