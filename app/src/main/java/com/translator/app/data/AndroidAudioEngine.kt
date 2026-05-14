@@ -117,6 +117,11 @@ class AndroidAudioEngine(
 
     override fun setUseAec(enabled: Boolean) { useAec = enabled }
 
+    override fun setNoiseGateThreshold(threshold: Float) {
+        // Заглушка, чтобы удовлетворить интерфейс. 
+        // В будущем можно привязать к переменной gateLow.
+    }
+
     // ════════════════════════════════════════════════════════════════════
     //  CAPTURE
     // ════════════════════════════════════════════════════════════════════
