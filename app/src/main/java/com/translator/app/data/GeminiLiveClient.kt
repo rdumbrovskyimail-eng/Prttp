@@ -81,6 +81,7 @@ class GeminiLiveClient(
     @Volatile private var activeTurnId: Long = 0L
 
     private var currentConfig: SessionConfig? = null
+    private var reconnectAttempts: Int = 0
     
     @Volatile private var closeCompletion: CompletableDeferred<Unit>? = null
     @Volatile private var setupWatchdog: Job? = null
@@ -119,6 +120,7 @@ class GeminiLiveClient(
 
                 override fun onOpen(ws: WebSocket, response: okhttp3.Response) {
                     logger.d("WS opened (${response.code}) — sending setup…")
+                    reconnectAttempts = 0
                     _events.tryEmit(GeminiEvent.Connected)
                     sendSetup(config)
                     startSetupWatchdog(config.setupTimeoutMs)
@@ -140,7 +142,10 @@ class GeminiLiveClient(
                 override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                     val desc = describeCloseCode(code)
                     logger.d("WS closed: $code $desc reason='$reason'")
-                    if (code == 1007 || code == 1008) {
+                    if (code == 1008) {
+                        logger.e("⛔ Permanent error 1008 — aborting reconnect")
+                        _events.tryEmit(GeminiEvent.ConnectionError("Permanent error: $reason"))
+                    } else if (code == 1007) {
                         synchronized(lastSentFrames) {
                             if (lastSentFrames.isNotEmpty()) {
                                 logger.e("⚠ LAST SENT FRAMES before $code:")
