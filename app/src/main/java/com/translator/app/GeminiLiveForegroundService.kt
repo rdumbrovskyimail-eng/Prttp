@@ -49,15 +49,12 @@ class GeminiLiveForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // ВСЕГДА startForeground в первую очередь.
-        if (!startForegroundSafe()) {
-            // Не удалось — нет смысла продолжать (Android 14+ может запретить mic-FGS из фона).
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
         when (intent?.action) {
             ACTION_START -> {
+                if (!startForegroundSafe()) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 requestAudioFocus()
                 val forceSpeaker = intent.getBooleanExtra(EXTRA_FORCE_SPEAKER, true)
                 routeAudio(forceSpeaker)
