@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -91,72 +93,74 @@ class GeminiLiveClient(
     //  CONNECT / DISCONNECT
     // ════════════════════════════════════════════════════════════
 
-    override suspend fun connect(apiKey: String, config: SessionConfig, logRaw: Boolean) = connectionMutex.withLock {
-        if (webSocket != null) disconnect()
+    override suspend fun connect(apiKey: String, config: SessionConfig, logRaw: Boolean) {
+        connectionMutex.withLock {
+            if (webSocket != null) disconnect()
 
-        currentConfig = config
-        logRawFrames = logRaw
-        isReady = false
-        droppedAudioChunks = 0L
-        synchronized(lastSentFrames) { lastSentFrames.clear() }
-        closeCompletion = CompletableDeferred()
+            currentConfig = config
+            logRawFrames = logRaw
+            isReady = false
+            droppedAudioChunks = 0L
+            synchronized(lastSentFrames) { lastSentFrames.clear() }
+            closeCompletion = CompletableDeferred()
 
-        val url = "wss://${SessionConfig.WS_HOST}/${SessionConfig.WS_PATH}?key=$apiKey"
-        logger.d("Connecting to ${config.model}…")
+            val url = "wss://${SessionConfig.WS_HOST}/${SessionConfig.WS_PATH}?key=$apiKey"
+            logger.d("Connecting to ${config.model}…")
 
-        val request = Request.Builder().url(url).build()
+            val request = Request.Builder().url(url).build()
 
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+            webSocket = client.newWebSocket(request, object : WebSocketListener() {
 
-            override fun onOpen(ws: WebSocket, response: okhttp3.Response) {
-                logger.d("WS opened (${response.code}) — sending setup…")
-                _events.tryEmit(GeminiEvent.Connected)
-                sendSetup(config)
-                startSetupWatchdog(config.setupTimeoutMs)
-            }
-
-            override fun onMessage(ws: WebSocket, text: String) {
-                if (logRawFrames) {
-                    val preview = if (text.length > 500) text.take(500) + "…" else text
-                    logger.d("RAW ← $preview")
+                override fun onOpen(ws: WebSocket, response: okhttp3.Response) {
+                    logger.d("WS opened (${response.code}) — sending setup…")
+                    _events.tryEmit(GeminiEvent.Connected)
+                    sendSetup(config)
+                    startSetupWatchdog(config.setupTimeoutMs)
                 }
-                parseServerMessage(text)
-            }
 
-            override fun onMessage(ws: WebSocket, bytes: ByteString) {
-                try { parseServerMessage(bytes.utf8()) }
-                catch (e: Exception) { logger.e("Binary frame decode: ${e.message}") }
-            }
+                override fun onMessage(ws: WebSocket, text: String) {
+                    if (logRawFrames) {
+                        val preview = if (text.length > 500) text.take(500) + "…" else text
+                        logger.d("RAW ← $preview")
+                    }
+                    parseServerMessage(text)
+                }
 
-            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-                val desc = describeCloseCode(code)
-                logger.d("WS closed: $code $desc reason='$reason'")
-                if (code == 1007 || code == 1008) {
-                    synchronized(lastSentFrames) {
-                        if (lastSentFrames.isNotEmpty()) {
-                            logger.e("⚠ LAST SENT FRAMES before $code:")
-                            lastSentFrames.forEachIndexed { i, f -> logger.e("  [$i] $f") }
+                override fun onMessage(ws: WebSocket, bytes: ByteString) {
+                    try { parseServerMessage(bytes.utf8()) }
+                    catch (e: Exception) { logger.e("Binary frame decode: ${e.message}") }
+                }
+
+                override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                    val desc = describeCloseCode(code)
+                    logger.d("WS closed: $code $desc reason='$reason'")
+                    if (code == 1007 || code == 1008) {
+                        synchronized(lastSentFrames) {
+                            if (lastSentFrames.isNotEmpty()) {
+                                logger.e("⚠ LAST SENT FRAMES before $code:")
+                                lastSentFrames.forEachIndexed { i, f -> logger.e("  [$i] $f") }
+                            }
                         }
                     }
+                    cancelSetupWatchdog()
+                    isReady = false
+                    closeCompletion?.complete(Unit)
+                    if (code != 1000 && code != 1001) {
+                        _events.tryEmit(GeminiEvent.ConnectionError("WS $code: $desc ${reason}"))
+                    }
+                    _events.tryEmit(GeminiEvent.Disconnected(code, reason))
                 }
-                cancelSetupWatchdog()
-                isReady = false
-                closeCompletion?.complete(Unit)
-                if (code != 1000 && code != 1001) {
-                    _events.tryEmit(GeminiEvent.ConnectionError("WS $code: $desc ${reason}"))
-                }
-                _events.tryEmit(GeminiEvent.Disconnected(code, reason))
-            }
 
-            override fun onFailure(ws: WebSocket, t: Throwable, response: okhttp3.Response?) {
-                val status = response?.code?.let { " (HTTP $it)" } ?: ""
-                logger.e("WS failure$status: ${t.message}")
-                cancelSetupWatchdog()
-                isReady = false
-                closeCompletion?.complete(Unit)
-                _events.tryEmit(GeminiEvent.ConnectionError(t.message ?: "Unknown WS error"))
-            }
-        })
+                override fun onFailure(ws: WebSocket, t: Throwable, response: okhttp3.Response?) {
+                    val status = response?.code?.let { " (HTTP $it)" } ?: ""
+                    logger.e("WS failure$status: ${t.message}")
+                    cancelSetupWatchdog()
+                    isReady = false
+                    closeCompletion?.complete(Unit)
+                    _events.tryEmit(GeminiEvent.ConnectionError(t.message ?: "Unknown WS error"))
+                }
+            })
+        }
     }
 
     private fun startSetupWatchdog(timeoutMs: Long) {
@@ -173,19 +177,22 @@ class GeminiLiveClient(
 
     private fun cancelSetupWatchdog() { setupWatchdog?.cancel(); setupWatchdog = null }
     
-    override suspend fun disconnect() = connectionMutex.withLock {
-        cancelSetupWatchdog()
-        val ws = webSocket        if (ws == null) { isReady = false; return }
-        val completion = closeCompletion
-        runCatching { ws.close(1000, "bye") }
-        if (completion != null && !completion.isCompleted) {
-            withTimeoutOrNull(2000L) { completion.await() }
+    override suspend fun disconnect() {
+        connectionMutex.withLock {
+            cancelSetupWatchdog()
+            val ws = webSocket
+            if (ws == null) { isReady = false; return@withLock }
+            val completion = closeCompletion
+            runCatching { ws.close(1000, "bye") }
+            if (completion != null && !completion.isCompleted) {
+                withTimeoutOrNull(2000L) { completion.await() }
+            }
+            webSocket = null
+            isReady = false
+            closeCompletion = null
+            // Любые stale-chunki после disconnect игнорируются.
+            activeTurnId = currentTurnId.incrementAndGet()
         }
-        webSocket = null
-        isReady = false
-        closeCompletion = null
-        // Любые stale-chunki после disconnect игнорируются.
-        activeTurnId = currentTurnId.incrementAndGet()
     }
 
     // ════════════════════════════════════════════════════════════
