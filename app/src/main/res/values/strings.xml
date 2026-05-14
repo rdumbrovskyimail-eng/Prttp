@@ -2,14 +2,11 @@
 <resources>
     <string name="app_name">Translator</string>
 
-    <!-- ═══ Permissions ═══ -->
     <string name="mic_permission_rationale">Для работы голосового ассистента необходим доступ к микрофону</string>
     <string name="notification_permission_rationale">Для отображения статуса сессии необходимы уведомления</string>
 
-    <!-- ═══ Translator Screen ═══ -->
     <string name="translator_title">Translator</string>
 
-    <!-- Статусы вверху -->
     <string name="status_disconnected">Не подключено</string>
     <string name="status_connecting">Подключение…</string>
     <string name="status_reconnecting">Переподключение…</string>
@@ -17,36 +14,27 @@
     <string name="status_listening">Слушаю</string>
     <string name="status_ai_speaking">Перевод</string>
 
-    <!-- Empty state -->
     <string name="hint_idle_title">Голосовой переводчик</string>
     <string name="hint_idle_subtitle">Подключение к серверу…</string>
     <string name="hint_active_title">Говорите свободно</string>
     <string name="hint_active_subtitle">Перевод появится здесь и прозвучит вслух</string>
 
-    <!-- Карточка перевода -->
     <string name="card_label_original">Распознано</string>
     <string name="card_label_translation">Перевод</string>
 
-    <!-- Accessibility -->
     <string name="cd_back">Назад</string>
     <string name="cd_settings">Настройки</string>
-    <string name="cd_logs">Журнал</string>
+    <string name="cd_logs">Логи</string>
     <string name="cd_mic_start">Начать перевод</string>
     <string name="cd_mic_stop">Остановить перевод</string>
 
-    <!-- ═══ Settings — Theme ═══ -->
-    <string name="settings_section_appearance">Оформление</string>
+    <string name="settings_section_appearance">Внешний вид</string>
     <string name="settings_theme_label">Тема</string>
 
-    <string name="theme_aurora">Aurora</string>
-    <string name="theme_aurora_desc">Светлая · navy и янтарь</string>
-
-    <string name="theme_berlin">Berlin Mist</string>
-    <string name="theme_berlin_desc">Светлая · холодный минимализм</string>
-
-    <string name="theme_sakura">Sakura</string>
-    <string name="theme_sakura_desc">Светлая · мягкая роза и тил</string>
-
     <string name="theme_obsidian">Obsidian</string>
-    <string name="theme_obsidian_desc">Тёмная · бирюза и лаванда</string>
+    <string name="theme_obsidian_desc">Тёмная · True-black OLED</string>
+    <string name="theme_sakura">Sakura</string>
+    <string name="theme_sakura_desc">Светлая · Dusty rose &amp; teal</string>
+    <string name="theme_gem">Gem</string>
+    <string name="theme_gem_desc">Светлая · Apple-clean Gemini</string>
 </resources>
