@@ -23,12 +23,13 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.translator.app.presentation.theme.AppPalette
 import kotlinx.coroutines.flow.Flow
@@ -75,7 +76,11 @@ fun GemInkBloom(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
-                .blur(radius = 36.dp)
+                .graphicsLayer {
+                    renderEffect = android.graphics.RenderEffect
+                        .createBlurEffect(36.dp.toPx(), 36.dp.toPx(), android.graphics.Shader.TileMode.DECAL)
+                        .asComposeRenderEffect()
+                }
         ) {
             val w = size.width
             val h = size.height
@@ -128,8 +133,7 @@ fun GemInkBloom(
                 drawCircle(
                     brush = brush,
                     radius = cloudR,
-                    center = Offset(orbitX, orbitY),
-                    blendMode = BlendMode.Plus
+                    center = Offset(orbitX, orbitY)
                 )
             }
         }
