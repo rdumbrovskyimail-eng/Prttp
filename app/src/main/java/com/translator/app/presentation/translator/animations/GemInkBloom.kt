@@ -63,7 +63,7 @@ fun GemInkBloom(
         var prev = System.nanoTime()
         while (true) {
             withFrameNanos { now ->
-                val dt = (now - prev).coerceAtLeast(0L) / 1_000_000_000f
+                val dt = ((now - prev).coerceAtLeast(0L) / 1_000_000_000f).coerceAtMost(0.05f)
                 prev = now
                 phase.floatValue += dt * (0.35f + level * 3.5f + peak * 1.4f)
             }
