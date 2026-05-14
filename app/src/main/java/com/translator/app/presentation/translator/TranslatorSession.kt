@@ -31,7 +31,6 @@ object TranslatorSession {
             maxOutputTokens = settings.maxOutputTokens,
 
             voiceId = settings.voiceId,
-            responseModality = "AUDIO",
             latencyProfile = latencyProfile,
             thinkingIncludeThoughts = settings.includeThoughts,
 
