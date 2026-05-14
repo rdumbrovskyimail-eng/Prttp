@@ -62,9 +62,7 @@ class AppSettingsSerializer @Inject constructor() : Serializer<AppSettings> {
             }
             val plain = cipher.doFinal(ciphertext).decodeToString()
             json.decodeFromString(AppSettings.serializer(), plain)
-        } catch (_: CorruptionException) {
-            defaultValue
-        } catch (_: Throwable) {
+        } catch (e: Exception) {
             defaultValue
         }
     }
