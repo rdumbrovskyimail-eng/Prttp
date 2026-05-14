@@ -228,9 +228,7 @@ class GeminiLiveClient(
     private fun buildFullSetup(config: SessionConfig): JsonObject = buildJsonObject {
         put("setup", buildJsonObject {
             // proto BidiGenerateContentSetup: Required format is "models/{model}".
-            val modelResource = if (config.model.startsWith("models/")) config.model
-                                else "models/${config.model}"
-            put("model", modelResource)
+            put("model", if (config.model.startsWith("models/")) config.model else "models/${config.model}")
 
             // ─── generationConfig ───
             put("generationConfig", buildJsonObject {
