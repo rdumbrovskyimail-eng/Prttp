@@ -22,8 +22,7 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -53,11 +52,12 @@ class AndroidAudioEngine(
     // Принципиально: consumer обязан release. Если эмиссия не прошла — мы тут же release.
     // Но при BufferOverflow.DROP_OLDEST SharedFlow дропает старый элемент без release —
     // поэтому используем onEach + manual release в consumer'е (см. TranslatorViewModel).
-    private val _micOutput = MutableSharedFlow<MicAudioChunk>(
-        replay = 0, extraBufferCapacity = 8,
-        onBufferOverflow = BufferOverflow.SUSPEND
+    private val _micChannel = Channel<MicAudioChunk>(
+        capacity = 16,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+        onUndeliveredElement = { it.release() }
     )
-    override val micOutput: Flow<MicAudioChunk> = _micOutput.asSharedFlow()
+    override val micOutput: Flow<MicAudioChunk> = _micChannel.receiveAsFlow()
 
     private val _playbackSync = MutableSharedFlow<ByteArray>(
         replay = 0, extraBufferCapacity = 128,
@@ -285,9 +285,8 @@ class AndroidAudioEngine(
                             }
 
                             val chunk = MicAudioChunk(outBytes, outPos, pool)
-                            if (!_micOutput.tryEmit(chunk)) {
-                                chunk.release()
-                            }
+                            val result = _micChannel.trySend(chunk)
+                            if (result.isFailure) chunk.release()
                         }
                         read == 0 -> yield()
                         else -> { logger.d("AudioRecord.read=$read — exiting"); break }
