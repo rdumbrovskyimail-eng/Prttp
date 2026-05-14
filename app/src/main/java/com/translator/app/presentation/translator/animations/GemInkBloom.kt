@@ -57,7 +57,8 @@ fun GemInkBloom(
 
     val phase = remember { mutableFloatStateOf(0f) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(isAiSpeaking) {
+        if (!isAiSpeaking) return@LaunchedEffect
         var prev = System.nanoTime()
         while (true) {
             withFrameNanos { now ->
