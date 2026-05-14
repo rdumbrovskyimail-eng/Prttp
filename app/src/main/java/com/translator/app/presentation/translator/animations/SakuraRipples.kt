@@ -60,6 +60,7 @@ fun SakuraRipples(
     )
 
     LaunchedEffect(audioFlow, isAiSpeaking) {
+        if (!isAiSpeaking) return@LaunchedEffect
         var prev = System.nanoTime()
         while (true) {
             withFrameNanos { now ->
