@@ -74,6 +74,16 @@ fun ObsidianOrb(
 
     val effectiveAngle1 = orb1 + level * orb1 * 0.6f
 
+    LaunchedEffect(isAiSpeaking) {
+        if (!isAiSpeaking) return@LaunchedEffect
+        var prevT = System.nanoTime()
+        while (true) {
+            withFrameNanos { now ->
+                // Animation logic loop
+            }
+        }
+    }
+
     Canvas(modifier = Modifier.size(190.dp)) {
         val w = size.width; val h = size.height
         val cx = w / 2f; val cy = h / 2f
