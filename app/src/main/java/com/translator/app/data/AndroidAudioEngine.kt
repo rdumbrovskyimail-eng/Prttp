@@ -447,11 +447,17 @@ class AndroidAudioEngine(
     override suspend fun releaseAll() = playbackMutex.withLock {
         stopCapture()
         isPlaying = false
-        runCatching { playbackChannel.close() }
+        // Строгий порядок закрытия для предотвращения IllegalStateException
         runCatching { withTimeoutOrNull(800L) { playbackJob?.cancelAndJoin() } }
         playbackJob = null
-        audioTrack?.let { runCatching { it.pause(); it.flush(); it.stop(); it.release() } }
+        audioTrack?.let { track ->
+            runCatching { track.pause() }
+            runCatching { track.flush() }
+            runCatching { track.stop() }
+            runCatching { track.release() }
+        }
         audioTrack = null
+        runCatching { playbackChannel.close() }
         runCatching { withTimeoutOrNull(800L) { engineScope.coroutineContext[Job]?.cancelAndJoin() } }
         logger.d("Engine released")
     }
