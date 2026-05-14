@@ -24,4 +24,5 @@ interface AudioEngine {
     fun setSpeakerRouting(forceSpeaker: Boolean)
     fun setPlaybackBoost(boost: Float)
     fun setUseAec(enabled: Boolean)
+    fun setNoiseGateThreshold(threshold: Float)
 }
