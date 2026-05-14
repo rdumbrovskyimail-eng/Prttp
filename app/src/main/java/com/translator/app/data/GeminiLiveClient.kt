@@ -73,9 +73,9 @@ class GeminiLiveClient(
     @Volatile private var activeTurnId: Long = 0L
 
     private var currentConfig: SessionConfig? = null
-
-    @Volatile private var closeCompletion: CompletableDeferred<Unit>? = null
-    @Volatile private var setupWatchdog: Job? = null
+    private val connectionMutex = kotlinx.coroutines.sync.Mutex()
+    
+    @Volatile private var closeCompletion: CompletableDeferred<Unit>? = null    @Volatile private var setupWatchdog: Job? = null
 
     private val lastSentFrames = java.util.ArrayDeque<String>(3)
 
@@ -91,7 +91,7 @@ class GeminiLiveClient(
     //  CONNECT / DISCONNECT
     // ════════════════════════════════════════════════════════════
 
-    override suspend fun connect(apiKey: String, config: SessionConfig, logRaw: Boolean) {
+    override suspend fun connect(apiKey: String, config: SessionConfig, logRaw: Boolean) = connectionMutex.withLock {
         if (webSocket != null) disconnect()
 
         currentConfig = config
@@ -172,11 +172,10 @@ class GeminiLiveClient(
     }
 
     private fun cancelSetupWatchdog() { setupWatchdog?.cancel(); setupWatchdog = null }
-
-    override suspend fun disconnect() {
+    
+    override suspend fun disconnect() = connectionMutex.withLock {
         cancelSetupWatchdog()
-        val ws = webSocket
-        if (ws == null) { isReady = false; return }
+        val ws = webSocket        if (ws == null) { isReady = false; return }
         val completion = closeCompletion
         runCatching { ws.close(1000, "bye") }
         if (completion != null && !completion.isCompleted) {
