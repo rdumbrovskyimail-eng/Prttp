@@ -1,24 +1,16 @@
-// ═══════════════════════════════════════════════════════════
-// ПОЛНАЯ ЗАМЕНА (v3.0)
-// Путь: app/src/main/java/com/translator/app/MainActivity.kt
-//
-// Корень приложения. Читает AppSettings из ViewModel, строит:
-//   • GeminiLiveTheme(themeId)            → LocalAppPalette с интерполяцией
-//   • CompositionLocalProvider(LocalMessageReveal) → live-стиль сообщений
-//   • AppNavGraph()                       → весь UI
-//
-// При смене темы или стиля в SettingsScreen — оба провайдера получают
-// новые значения МГНОВЕННО (через collectAsStateWithLifecycle).
-// UI не перемонтируется, а только перетекает в новое состояние.
-// ═══════════════════════════════════════════════════════════
 package com.translator.app
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.translator.app.presentation.navigation.AppNavGraph
@@ -31,9 +23,22 @@ import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    private val notifLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* no-op, лучше иметь нотификацию, но без неё работаем */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
         setContent {
             val settingsVm: SettingsViewModel = hiltViewModel()
             val settings by settingsVm.settings.collectAsStateWithLifecycle()
