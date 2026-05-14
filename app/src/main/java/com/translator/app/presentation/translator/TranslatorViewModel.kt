@@ -199,7 +199,10 @@ class TranslatorViewModel @Inject constructor(
         _state.update { it.copy(isMicActive = true, connectionStatus = ConnectionStatus.Recording) }
         micJob = viewModelScope.launch {
             audioEngine.startCapture()
-            audioEngine.micOutput.collect { chunk -> liveClient.sendAudio(chunk) }
+            audioEngine.micOutput.collect { chunk ->
+                try { liveClient.sendAudio(chunk) }
+                finally { chunk.release() }
+            }
         }
     }
 
