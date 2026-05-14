@@ -32,6 +32,10 @@
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
 -keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
 -keepclassmembernames class kotlinx.** { volatile <fields>; }
+-dontwarn kotlinx.coroutines.debug.**
+-dontwarn kotlinx.coroutines.flow.**
+-keepnames class kotlinx.coroutines.flow.** { *; }
+-keepclassmembers class kotlinx.coroutines.channels.** { *; }
 
 # ═══════════════════════════════════════════════════════════
 #  Android Keystore
