@@ -289,7 +289,10 @@ class TranslatorViewModel @Inject constructor(
                         }
                     }
                     is GeminiEvent.SessionHandleUpdate -> { /* handle stored inside client */ }
-                    is GeminiEvent.GoAway -> { logger.w("GoAway: ${event.timeLeft}") }
+                    is GeminiEvent.GoAway -> { 
+                        logger.w("GoAway received: ${event.timeLeft}. Scheduling reconnect.")
+                        scheduleReconnect() 
+                    }
                     is GeminiEvent.Disconnected -> {
                         // Закрываем mic-петлю чтобы не было fantom-эмиссий.
                         micJob?.cancel(); micJob = null
