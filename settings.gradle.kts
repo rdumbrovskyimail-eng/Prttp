@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "CopyM"
+rootProject.name = "Translator"
 include(":app")
