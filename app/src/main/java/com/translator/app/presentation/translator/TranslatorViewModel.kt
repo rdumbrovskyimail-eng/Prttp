@@ -114,6 +114,7 @@ class TranslatorViewModel @Inject constructor(
         if (language.code == _state.value.targetLanguage.code) return
         viewModelScope.launch {
             settingsStore.updateData { it.copy(sourceLanguageCode = language.code) }
+            reconnectIfActive()
         }
     }
 
@@ -121,6 +122,7 @@ class TranslatorViewModel @Inject constructor(
         if (language.code == _state.value.sourceLanguage.code) return
         viewModelScope.launch {
             settingsStore.updateData { it.copy(targetLanguageCode = language.code) }
+            reconnectIfActive()
         }
     }
 
@@ -132,6 +134,22 @@ class TranslatorViewModel @Inject constructor(
                     targetLanguageCode = it.sourceLanguageCode
                 )
             }
+            reconnectIfActive()
+        }
+    }
+
+    private suspend fun reconnectIfActive() {
+        val status = _state.value.connectionStatus
+        if (status == ConnectionStatus.Ready ||
+            status == ConnectionStatus.Recording ||
+            status == ConnectionStatus.Reconnecting
+        ) {
+            logger.d("Language changed — reconnecting with new system instruction")
+            micJob?.cancelAndJoin(); micJob = null
+            audioEngine.stopCapture()
+            liveClient.disconnect()
+            cachedSettings = settingsStore.data.first()
+            connectInternal()
         }
     }
 
