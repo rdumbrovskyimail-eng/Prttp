@@ -1,11 +1,3 @@
-// ═══════════════════════════════════════════════════════════
-// ПОЛНАЯ ЗАМЕНА
-// Путь: app/src/main/java/com/translator/app/data/AndroidAudioEngine.kt
-//
-// FIX: удалён orphan-фрагмент старой DSP-цепочки между AGC-блоком
-// и stopCapture(), из-за которого все методы класса оказывались
-// вне класса. Структура скобок восстановлена.
-// ═══════════════════════════════════════════════════════════
 package com.translator.app.data
 
 import android.media.AudioAttributes
@@ -14,10 +6,11 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import com.translator.app.domain.AudioEngine
 import com.translator.app.domain.model.AudioBufferPool
-import com.translator.app.domain.model.AudioChunk
+import com.translator.app.domain.model.MicAudioChunk
 import com.translator.app.domain.model.SessionConfig
 import com.translator.app.util.AppLogger
 import kotlinx.coroutines.CoroutineScope
@@ -33,9 +26,12 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
+import kotlin.math.tanh
 
 class AndroidAudioEngine(
     private val logger: AppLogger
@@ -47,18 +43,21 @@ class AndroidAudioEngine(
     @Volatile private var jitterTimeoutMs = 150L
 
     @Volatile private var playbackGain: Float = 1.0f
-    @Volatile private var micGain: Float = 2.0f
+    @Volatile private var micGain: Float = 1.0f
     @Volatile private var forceSpeakerOutput: Boolean = true
     @Volatile private var useAec: Boolean = true
 
-    @Volatile private var playbackBoost: Float = 1.6f
+    @Volatile private var playbackBoost: Float = 1.4f
 
     // ═══ FLOWS ═══
-    private val _micOutput = MutableSharedFlow<AudioChunk>(
-        replay = 0, extraBufferCapacity = 32,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    // Принципиально: consumer обязан release. Если эмиссия не прошла — мы тут же release.
+    // Но при BufferOverflow.DROP_OLDEST SharedFlow дропает старый элемент без release —
+    // поэтому используем onEach + manual release в consumer'е (см. TranslatorViewModel).
+    private val _micOutput = MutableSharedFlow<MicAudioChunk>(
+        replay = 0, extraBufferCapacity = 8,
+        onBufferOverflow = BufferOverflow.SUSPEND
     )
-    override val micOutput: Flow<AudioChunk> = _micOutput.asSharedFlow()
+    override val micOutput: Flow<MicAudioChunk> = _micOutput.asSharedFlow()
 
     private val _playbackSync = MutableSharedFlow<ByteArray>(
         replay = 0, extraBufferCapacity = 128,
@@ -77,8 +76,10 @@ class AndroidAudioEngine(
     @Volatile private var audioRecord: AudioRecord? = null
     @Volatile private var echoCanceler: AcousticEchoCanceler? = null
     @Volatile private var noiseSuppressor: NoiseSuppressor? = null
+    @Volatile private var autoGainControl: AutomaticGainControl? = null
     @Volatile private var audioTrack: AudioTrack? = null
 
+    private val playbackMutex = Mutex()
     @Volatile private var playbackChannel: Channel<ByteArray> =
         Channel(playbackQueueCapacity, BufferOverflow.DROP_OLDEST)
     @Volatile private var isFirstBatch = true
@@ -97,7 +98,7 @@ class AndroidAudioEngine(
         jitterPreBufferChunks = preBufferChunks.coerceIn(1, 10)
         jitterTimeoutMs = timeoutMs.coerceIn(50L, 500L)
         playbackQueueCapacity = queueCapacity.coerceIn(64, 512)
-        logger.d("Jitter config: preBuffer=$jitterPreBufferChunks, timeout=${jitterTimeoutMs}ms, queue=$playbackQueueCapacity")
+        logger.d("Jitter: preBuf=$jitterPreBufferChunks, timeout=${jitterTimeoutMs}ms, q=$playbackQueueCapacity")
     }
 
     override fun setPlaybackVolume(gain: Float) {
@@ -105,22 +106,16 @@ class AndroidAudioEngine(
         runCatching { audioTrack?.setVolume(playbackGain) }
     }
 
-    override fun setMicGain(gain: Float) {
-        micGain = gain.coerceIn(0.5f, 2.0f)
-    }
+    // micGain ограничен 0.5..1.5 — AGC доберёт остальное (макс ×2.5 совместно).
+    override fun setMicGain(gain: Float) { micGain = gain.coerceIn(0.5f, 1.5f) }
 
-    override fun setSpeakerRouting(forceSpeaker: Boolean) {
-        forceSpeakerOutput = forceSpeaker
-    }
+    override fun setSpeakerRouting(forceSpeaker: Boolean) { forceSpeakerOutput = forceSpeaker }
 
     override fun setPlaybackBoost(boost: Float) {
-        playbackBoost = boost.coerceIn(1.0f, 2.0f)
-        logger.d("Playback boost: ${"%.2f".format(playbackBoost)}x")
+        playbackBoost = boost.coerceIn(1.0f, 1.8f)
     }
 
-    override fun setUseAec(enabled: Boolean) {
-        useAec = enabled
-    }
+    override fun setUseAec(enabled: Boolean) { useAec = enabled }
 
     // ════════════════════════════════════════════════════════════════════
     //  CAPTURE
@@ -135,41 +130,24 @@ class AndroidAudioEngine(
         )
         for ((label, source) in sources) {
             val rec = try {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                    AudioRecord.Builder()
-                        .setAudioSource(source)
-                        .setAudioFormat(
-                            AudioFormat.Builder()
-                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                                .setSampleRate(sampleRate)
-                                .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                                .build()
-                        )
-                        .setBufferSizeInBytes(minBuf * 2)
-                        .build()
-                } else {
-                    @Suppress("DEPRECATION")
-                    AudioRecord(
-                        source, sampleRate,
-                        AudioFormat.CHANNEL_IN_MONO,
-                        AudioFormat.ENCODING_PCM_16BIT,
-                        minBuf * 2
+                AudioRecord.Builder()
+                    .setAudioSource(source)
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                            .build()
                     )
-                }
+                    .setBufferSizeInBytes(minBuf * 2)
+                    .build()
             } catch (e: SecurityException) {
                 logger.e("AudioRecord SECURITY ($label): ${e.message}")
                 return null to 0
-            } catch (e: UnsupportedOperationException) {
-                logger.w("AudioRecord UOE ($label): ${e.message} — trying next source")
-                null
-            } catch (e: IllegalArgumentException) {
-                logger.w("AudioRecord IAE ($label): ${e.message} — trying next source")
-                null
             } catch (e: Exception) {
-                logger.w("AudioRecord ctor ($label): ${e.javaClass.simpleName}: ${e.message}")
+                logger.w("AudioRecord ($label): ${e.javaClass.simpleName}: ${e.message}")
                 null
             }
-
             if (rec != null && rec.state == AudioRecord.STATE_INITIALIZED) {
                 logger.d("AudioRecord OK with source=$label")
                 return rec to source
@@ -182,8 +160,7 @@ class AndroidAudioEngine(
     @Suppress("MissingPermission")
     override suspend fun startCapture() {
         if (isCapturing) {
-            logger.d("startCapture skipped — already capturing")
-            return
+            logger.d("startCapture skipped — already capturing"); return
         }
         if (!engineScope.isActive) engineScope = newEngineScope()
 
@@ -192,110 +169,105 @@ class AndroidAudioEngine(
             sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
         if (minBuf == AudioRecord.ERROR || minBuf == AudioRecord.ERROR_BAD_VALUE) {
-            logger.e("AudioRecord.getMinBufferSize failed: $minBuf")
-            return
+            logger.e("AudioRecord.getMinBufferSize failed: $minBuf"); return
         }
 
         val (recorder, usedSource) = tryCreateRecorder(sampleRate, minBuf)
         if (recorder == null) {
-            logger.e("AudioRecord: ALL sources failed (VOICE_COMMUNICATION/MIC/DEFAULT). " +
-                    "Check RECORD_AUDIO permission, FGS state, and that no other app holds the mic.")
+            logger.e("AudioRecord: ALL sources failed.")
             return
         }
 
         if (useAec && AcousticEchoCanceler.isAvailable()) {
             runCatching {
-                echoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)?.apply {
-                    enabled = true
-                }
-                logger.d("AEC: enabled=${echoCanceler?.enabled} (source=$usedSource)")
+                echoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)?.apply { enabled = true }
             }.onFailure { logger.w("AEC init skipped: ${it.message}") }
         }
-
         if (NoiseSuppressor.isAvailable()) {
             runCatching {
-                noiseSuppressor = NoiseSuppressor.create(recorder.audioSessionId)?.apply {
-                    enabled = true
-                }
-                logger.d("NS: enabled=${noiseSuppressor?.enabled}")
+                noiseSuppressor = NoiseSuppressor.create(recorder.audioSessionId)?.apply { enabled = true }
             }.onFailure { logger.w("NS init skipped: ${it.message}") }
         }
-
-        try {
-            recorder.startRecording()
-        } catch (e: Exception) {
-            logger.e("startRecording failed: ${e.message}", e)
-            runCatching { recorder.release() }
-            return
+        // Системный AGC если доступен — отключает наш программный, мы и так считаем bonus.
+        if (AutomaticGainControl.isAvailable()) {
+            runCatching {
+                autoGainControl = AutomaticGainControl.create(recorder.audioSessionId)?.apply { enabled = true }
+            }.onFailure { logger.w("AGC HW init skipped: ${it.message}") }
         }
 
+        try { recorder.startRecording() } catch (e: Exception) {
+            logger.e("startRecording failed: ${e.message}", e)
+            runCatching { recorder.release() }; return
+        }
         if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-            logger.e("AudioRecord not in RECORDING state after startRecording()")
-            runCatching { recorder.stop() }
-            runCatching { recorder.release() }
-            return
+            logger.e("AudioRecord not in RECORDING state")
+            runCatching { recorder.stop(); recorder.release() }; return
         }
 
         val poolBufSize = minBuf * 2
         val pool = bufferPool
-            ?: AudioBufferPool(bufferSize = poolBufSize, poolCapacity = 32).also {
-                bufferPool = it
-            }
+            ?: AudioBufferPool(bufferSize = poolBufSize, poolCapacity = 32).also { bufferPool = it }
 
         audioRecord = recorder
         isCapturing = true
-        logger.d("Recording started (rate=$sampleRate, minBuf=$minBuf, source=$usedSource, pool=${poolBufSize}B×32)")
+        logger.d("Recording started rate=$sampleRate src=$usedSource pool=${poolBufSize}B×32")
 
         captureJob = engineScope.launch {
             val buffer = ShortArray(minBuf)
 
-            // ═══ Программный AGC (translator-tuned, soft) ═══
-            var rollingPeak = 4000
-            val targetPeak = 18_000          // было 24000 — мягче, не клипуем
+            // Программный мягкий AGC поверх системного.
+            var rollingPeak = 4000f
+            val targetPeak = 18_000f
             val agcAttack = 0.4f
             val agcRelease = 0.015f
-            val agcMaxBoost = 3.0f           // было 8.0f — критично для серверного VAD!
-            val agcMinBoost = 0.8f           // было 0.6f
-            val noiseFloor = 800             // было 300 — выше floor → меньше шум-буст
-            val noiseGateThreshold = 600     // НОВОЕ: ниже этого — обнуляем буфер
+            val agcMaxBoost = 2.0f      // снижено до ×2.0
+            val agcMinBoost = 0.8f
+            val noiseFloor = 800f
+
+            // Мягкий "gate" через коэффициент: до 600 → 0, до 1200 → линейный fade до 1.
+            // НИКАКОГО обнуления буфера — только плавное затухание амплитуды.
+            val gateLow = 600f
+            val gateHigh = 1200f
 
             try {
                 while (isActive && isCapturing) {
                     val read = recorder.read(buffer, 0, buffer.size)
                     when {
                         read > 0 -> {
-                            // Поиск пика блока
-                            var localPeak = 0
+                            // peak блока
+                            var lp = 0
                             for (i in 0 until read) {
                                 val v = kotlin.math.abs(buffer[i].toInt())
-                                if (v > localPeak) localPeak = v
+                                if (v > lp) lp = v
                             }
-                            rollingPeak = if (localPeak > rollingPeak) {
-                                (rollingPeak + (localPeak - rollingPeak) * agcAttack).toInt()
-                            } else {
-                                (rollingPeak - (rollingPeak - localPeak) * agcRelease).toInt()
-                            }
+                            val localPeak = lp.toFloat()
+
+                            rollingPeak = if (localPeak > rollingPeak)
+                                rollingPeak + (localPeak - rollingPeak) * agcAttack
+                            else
+                                rollingPeak - (rollingPeak - localPeak) * agcRelease
                             if (rollingPeak < noiseFloor) rollingPeak = noiseFloor
-                            val agcGain = (targetPeak.toFloat() / rollingPeak.toFloat())
-                                .coerceIn(agcMinBoost, agcMaxBoost)
-                            val finalGain = agcGain * micGain
 
-                            // Noise gate: если пик блока ниже порога — обнуляем
-                            // (защищает серверный VAD от ложных start-of-speech на тишине)
-                            if (localPeak < noiseGateThreshold) {
-                                for (i in 0 until read) buffer[i] = 0
-                            } else {
-                                for (i in 0 until read) {
-                                    val amplified = (buffer[i] * finalGain).toInt()
-                                    buffer[i] = when {
-                                        amplified > Short.MAX_VALUE -> Short.MAX_VALUE
-                                        amplified < Short.MIN_VALUE -> Short.MIN_VALUE
-                                        else -> amplified.toShort()
-                                    }
-                                }
+                            val agcGain = (targetPeak / rollingPeak).coerceIn(agcMinBoost, agcMaxBoost)
+                            // Совместный gain не более 2.5×.
+                            val finalGain = (agcGain * micGain).coerceAtMost(2.5f)
+
+                            // Плавный fade-out вместо noise gate: коэффициент 0..1 по интерполяции.
+                            val gateFactor = when {
+                                localPeak <= gateLow -> 0f
+                                localPeak >= gateHigh -> 1f
+                                else -> (localPeak - gateLow) / (gateHigh - gateLow)
+                            }
+                            val totalGain = finalGain * gateFactor
+
+                            // Soft-tanh клиппинг — без хрипа на пиках.
+                            for (i in 0 until read) {
+                                val sample = buffer[i].toInt() * totalGain
+                                val norm = sample / 32768f
+                                val soft = tanh(norm * 1.05f) * 32760f
+                                buffer[i] = soft.toInt().toShort()
                             }
 
-                            // Прямая запись в выходной буфер из пула (zero-alloc)
                             val outBytes = pool.borrow()
                             var outPos = 0
                             for (i in 0 until read) {
@@ -305,16 +277,13 @@ class AndroidAudioEngine(
                                 outPos += 2
                             }
 
-                            val chunk = AudioChunk(outBytes, outPos, pool)
-                            if (!_micOutput.tryEmit(chunk)) {
-                                chunk.release()
-                            }
+                            val chunk = MicAudioChunk(outBytes, outPos, pool)
+                            // emit — SUSPEND: если consumer медленный, мы ждём,
+                            // не создавая lost-buffer (ключ к отсутствию утечек пула).
+                            _micOutput.emit(chunk)
                         }
                         read == 0 -> yield()
-                        else -> {
-                            logger.d("AudioRecord.read returned $read — exiting loop")
-                            break
-                        }
+                        else -> { logger.d("AudioRecord.read=$read — exiting"); break }
                     }
                 }
             } catch (e: Exception) {
@@ -332,23 +301,17 @@ class AndroidAudioEngine(
         val rec = audioRecord
         val aec = echoCanceler
         val ns = noiseSuppressor
+        val agc = autoGainControl
 
         runCatching { rec?.stop() }
-
-        runCatching {
-            withTimeoutOrNull(800L) { captureJob?.cancelAndJoin() }
-        }
+        runCatching { withTimeoutOrNull(800L) { captureJob?.cancelAndJoin() } }
         captureJob = null
 
         withContext(Dispatchers.IO) {
-            runCatching { aec?.enabled = false }
-            runCatching { aec?.release() }
-            echoCanceler = null
-            runCatching { ns?.enabled = false }
-            runCatching { ns?.release() }
-            noiseSuppressor = null
-            runCatching { rec?.release() }
-            audioRecord = null
+            runCatching { aec?.enabled = false; aec?.release() }; echoCanceler = null
+            runCatching { ns?.enabled = false; ns?.release() }; noiseSuppressor = null
+            runCatching { agc?.enabled = false; agc?.release() }; autoGainControl = null
+            runCatching { rec?.release() }; audioRecord = null
         }
         logger.d("Capture stopped")
     }
@@ -357,11 +320,8 @@ class AndroidAudioEngine(
     //  PLAYBACK
     // ════════════════════════════════════════════════════════════════════
 
-    override suspend fun initPlayback() {
-        if (isPlaying) {
-            logger.d("initPlayback skipped — already playing")
-            return
-        }
+    override suspend fun initPlayback() = playbackMutex.withLock {
+        if (isPlaying) { logger.d("initPlayback skipped — already playing"); return@withLock }
         if (!engineScope.isActive) engineScope = newEngineScope()
         if (playbackChannel.isClosedForSend) {
             playbackChannel = Channel(playbackQueueCapacity, BufferOverflow.DROP_OLDEST)
@@ -372,8 +332,7 @@ class AndroidAudioEngine(
             sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
         if (minBuf == AudioTrack.ERROR || minBuf == AudioTrack.ERROR_BAD_VALUE) {
-            logger.e("Device does not support ${sampleRate}Hz!")
-            return
+            logger.e("Device does not support ${sampleRate}Hz!"); return@withLock
         }
 
         val track = try {
@@ -392,8 +351,7 @@ class AndroidAudioEngine(
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .setBufferSizeInBytes(minBuf * 2).build()
         } catch (e: Exception) {
-            logger.e("AudioTrack build failed: ${e.message}", e)
-            return
+            logger.e("AudioTrack build failed: ${e.message}", e); return@withLock
         }
 
         audioTrack = track
@@ -417,8 +375,8 @@ class AndroidAudioEngine(
                             } catch (_: ClosedReceiveChannelException) { return@repeat }
                             catch (_: Exception) { return@repeat }
                         }
-                        for (buffered in preBuffer) {
-                            val boosted = applyPlaybackBoost(buffered)
+                        for (buf in preBuffer) {
+                            val boosted = applyPlaybackBoost(buf)
                             _playbackSync.tryEmit(boosted)
                             runCatching { track.write(boosted, 0, boosted.size) }
                         }
@@ -442,6 +400,7 @@ class AndroidAudioEngine(
         }
     }
 
+    // Soft-tanh boost — без хрипа на пиках.
     private fun applyPlaybackBoost(pcm: ByteArray): ByteArray {
         val boost = playbackBoost
         if (boost <= 1.001f || pcm.size < 2) return pcm
@@ -454,12 +413,9 @@ class AndroidAudioEngine(
             val high = out[i + 1].toInt()
             val sample = (high shl 8) or low
             val signed = if (sample and 0x8000 != 0) sample or 0xFFFF0000.toInt() else sample
-            val amplified = (signed * boost).toInt()
-            val clipped = when {
-                amplified > Short.MAX_VALUE.toInt() -> Short.MAX_VALUE.toInt()
-                amplified < Short.MIN_VALUE.toInt() -> Short.MIN_VALUE.toInt()
-                else -> amplified
-            }
+            val norm = signed / 32768f
+            val soft = tanh(norm * boost) * 32760f
+            val clipped = soft.toInt()
             out[i] = (clipped and 0xFF).toByte()
             out[i + 1] = ((clipped shr 8) and 0xFF).toByte()
             i += 2
@@ -481,30 +437,22 @@ class AndroidAudioEngine(
         while (playbackChannel.tryReceive().isSuccess) { /* drain */ }
         isFirstBatch = true
         awaitingDrain = false
-        audioTrack?.apply {
-            runCatching { pause(); flush(); play() }
-        }
+        audioTrack?.apply { runCatching { pause(); flush(); play() } }
     }
 
     override suspend fun onTurnComplete() {
         awaitingDrain = true
     }
 
-    override suspend fun releaseAll() {
+    override suspend fun releaseAll() = playbackMutex.withLock {
         stopCapture()
         isPlaying = false
         runCatching { playbackChannel.close() }
-        runCatching {
-            withTimeoutOrNull(800L) { playbackJob?.cancelAndJoin() }
-        }
+        runCatching { withTimeoutOrNull(800L) { playbackJob?.cancelAndJoin() } }
         playbackJob = null
-        audioTrack?.let {
-            runCatching { it.pause(); it.flush(); it.stop(); it.release() }
-        }
+        audioTrack?.let { runCatching { it.pause(); it.flush(); it.stop(); it.release() } }
         audioTrack = null
-        runCatching {
-            withTimeoutOrNull(800L) { engineScope.coroutineContext[Job]?.cancelAndJoin() }
-        }
+        runCatching { withTimeoutOrNull(800L) { engineScope.coroutineContext[Job]?.cancelAndJoin() } }
         logger.d("Engine released")
     }
 }
