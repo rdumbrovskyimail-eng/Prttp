@@ -2,9 +2,6 @@
 #  Base
 # ═══════════════════════════════════════════════════════════
 -keepattributes *Annotation*, InnerClasses, Signature, Exceptions, EnclosingMethod
--keepclassmembers class * {
-    @android.webkit.JavascriptInterface <methods>;
-}
 -dontobfuscate
 
 # ═══════════════════════════════════════════════════════════
@@ -21,9 +18,7 @@
     kotlinx.serialization.KSerializer serializer(...);
 }
 -keep @kotlinx.serialization.Serializable class *
--keepclassmembers class * {
-    @kotlinx.serialization.SerialName *;
-}
+-keepclassmembers class * { @kotlinx.serialization.SerialName *; }
 
 # ═══════════════════════════════════════════════════════════
 #  Kotlin reflection / metadata
@@ -36,9 +31,7 @@
 # ═══════════════════════════════════════════════════════════
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
 -keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
--keepclassmembernames class kotlinx.** {
-    volatile <fields>;
-}
+-keepclassmembernames class kotlinx.** { volatile <fields>; }
 
 # ═══════════════════════════════════════════════════════════
 #  Android Keystore
@@ -62,41 +55,15 @@
 # ═══════════════════════════════════════════════════════════
 -keep class dagger.hilt.** { *; }
 -keep class javax.inject.** { *; }
--keep class * extends dagger.hilt.android.internal.managers.ViewComponentManager$FragmentContextWrapper
 -keep @dagger.hilt.android.lifecycle.HiltViewModel class * { <init>(...); }
--keepclassmembers class * {
-    @javax.inject.Inject <init>(...);
-}
-
-# ═══════════════════════════════════════════════════════════
-#  Room
-# ═══════════════════════════════════════════════════════════
--keep class * extends androidx.room.RoomDatabase
--keep @androidx.room.Entity class *
--keepclassmembers class * {
-    @androidx.room.* <methods>;
-}
--dontwarn androidx.room.paging.**
+-keepclassmembers class * { @javax.inject.Inject <init>(...); }
 
 # ═══════════════════════════════════════════════════════════
 #  Jetpack Compose
 # ═══════════════════════════════════════════════════════════
 -keep class androidx.compose.runtime.** { *; }
 -keep class androidx.compose.ui.** { *; }
--keepclassmembers class androidx.compose.** {
-    <init>(...);
-}
-
-# ═══════════════════════════════════════════════════════════
-#  SceneView / Filament / ARCore
-# ═══════════════════════════════════════════════════════════
--keep class com.google.android.filament.** { *; }
--keep class com.google.android.filament.utils.** { *; }
--keep class io.github.sceneview.** { *; }
--keep class com.google.ar.** { *; }
--dontwarn com.google.ar.core.**
--dontwarn com.google.ar.sceneform.**
--dontwarn com.google.android.filament.**
+-keepclassmembers class androidx.compose.** { <init>(...); }
 
 # ═══════════════════════════════════════════════════════════
 #  Timber
