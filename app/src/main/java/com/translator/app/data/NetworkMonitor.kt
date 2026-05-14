@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════════════════
-// НОВЫЙ ФАЙЛ
-// Путь: app/src/main/java/com/codeextractor/app/data/NetworkMonitor.kt
-// ═══════════════════════════════════════════════════════════
 package com.translator.app.data
 
 import android.content.Context
@@ -18,59 +14,35 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Наблюдатель состояния сети.
- * Использует ConnectivityManager.NetworkCallback для мгновенного
- * определения потери/восстановления подключения.
- *
- * VoiceViewModel подписывается и запускает reconnect при восстановлении сети.
- */
 @Singleton
 class NetworkMonitor @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
-    private val connectivityManager =
-        context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    private val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
     val isConnected: Flow<Boolean> = callbackFlow {
         val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                trySend(true)
-            }
-
-            override fun onLost(network: Network) {
-                trySend(false)
-            }
-
-            override fun onCapabilitiesChanged(
-                network: Network,
-                capabilities: NetworkCapabilities
-            ) {
-                val hasInternet = capabilities.hasCapability(
-                    NetworkCapabilities.NET_CAPABILITY_INTERNET
-                ) && capabilities.hasCapability(
-                    NetworkCapabilities.NET_CAPABILITY_VALIDATED
-                )
-                trySend(hasInternet)
+            override fun onAvailable(network: Network) { trySend(true) }
+            override fun onLost(network: Network) { trySend(false) }
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                val ok = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                trySend(ok)
             }
         }
-
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
+        runCatching { cm.registerNetworkCallback(request, callback) }
 
-        connectivityManager.registerNetworkCallback(request, callback)
+        // Начальное состояние.
+        val initial = runCatching {
+            val active = cm.activeNetwork
+            val caps = active?.let { cm.getNetworkCapabilities(it) }
+            caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        }.getOrDefault(false)
+        trySend(initial)
 
-        // Начальное состояние
-        val activeNetwork = connectivityManager.activeNetwork
-        val caps = activeNetwork?.let { connectivityManager.getNetworkCapabilities(it) }
-        val initiallyConnected = caps?.hasCapability(
-            NetworkCapabilities.NET_CAPABILITY_INTERNET
-        ) == true
-        trySend(initiallyConnected)
-
-        awaitClose {
-            connectivityManager.unregisterNetworkCallback(callback)
-        }
+        awaitClose { runCatching { cm.unregisterNetworkCallback(callback) } }
     }.conflate().distinctUntilChanged()
 }
