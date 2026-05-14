@@ -76,10 +76,7 @@ fun GemInkBloom(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
-                .androidx.compose.ui.draw.blur(
-                    radius = 36.dp,
-                    edgeTreatment = androidx.compose.ui.draw.BlurredEdgeTreatment.Unbounded
-                )
+                .androidx.compose.ui.draw.blur(radius = 36.dp)
         ) {
             val w = size.width
             val h = size.height
