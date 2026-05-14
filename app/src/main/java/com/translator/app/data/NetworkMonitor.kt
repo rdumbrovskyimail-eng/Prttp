@@ -34,7 +34,8 @@ class NetworkMonitor @Inject constructor(
         val initial = runCatching {
             val active = cm.activeNetwork
             val caps = active?.let { cm.getNetworkCapabilities(it) }
-            caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+            caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
         }.getOrDefault(false)
         trySend(initial)
 
