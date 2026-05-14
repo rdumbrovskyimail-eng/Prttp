@@ -110,7 +110,8 @@ class GeminiLiveClient(
             synchronized(lastSentFrames) { lastSentFrames.clear() }
             closeCompletion = CompletableDeferred()
 
-            val url = "wss://${SessionConfig.WS_HOST}/${SessionConfig.WS_PATH}?key=$apiKey"
+            val encodedKey = java.net.URLEncoder.encode(apiKey, "UTF-8")
+            val url = "wss://${SessionConfig.WS_HOST}/${SessionConfig.WS_PATH}?key=$encodedKey"
             logger.d("Connecting to ${config.model}…")
 
             val request = Request.Builder().url(url).build()
