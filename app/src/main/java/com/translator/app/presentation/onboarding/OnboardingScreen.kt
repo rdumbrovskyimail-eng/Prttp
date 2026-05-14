@@ -8,7 +8,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -65,13 +64,18 @@ fun OnboardingScreen(
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().background(Color(0xFFF8FAFC)).padding(24.dp),
+        modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("Gemini Translate", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1A73E8))
+        Text("Gemini Translate", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
         Spacer(modifier = Modifier.height(8.dp))
-        Text("Добро пожаловать! Для работы синхронного переводчика необходим API ключ Google Gemini.", fontSize = 15.sp, color = Color.Gray, textAlign = TextAlign.Center)
+        Text(
+            "Добро пожаловать! Для работы синхронного переводчика необходим API ключ Google Gemini.",
+            fontSize = 15.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
         Spacer(modifier = Modifier.height(32.dp))
 
         OutlinedTextField(
@@ -82,13 +86,12 @@ fun OnboardingScreen(
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF1A73E8), focusedLabelColor = Color(0xFF1A73E8))
+            shape = RoundedCornerShape(12.dp)
         )
 
         Spacer(modifier = Modifier.height(16.dp))
         TextButton(onClick = { uriHandler.openUri("https://aistudio.google.com/app/apikey") }) {
-            Text("Получить ключ в Google AI Studio", color = Color(0xFF1A73E8))
+            Text("Получить ключ в Google AI Studio")
         }
 
         Spacer(modifier = Modifier.height(32.dp))
@@ -96,8 +99,7 @@ fun OnboardingScreen(
             onClick = { viewModel.saveAndContinue(onNavigateToTranslator) },
             enabled = viewModel.apiKey.isNotBlank(),
             modifier = Modifier.fillMaxWidth().height(56.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A73E8))
+            shape = RoundedCornerShape(16.dp)
         ) {
             Text("Перейти в переводчик", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         }
