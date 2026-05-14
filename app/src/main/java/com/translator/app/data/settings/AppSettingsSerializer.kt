@@ -70,21 +70,27 @@ class AppSettingsSerializer @Inject constructor() : Serializer<AppSettings> {
     }
 
     override suspend fun writeTo(t: AppSettings, output: OutputStream) {
-        val plain = json.encodeToString(AppSettings.serializer(), t).encodeToByteArray()
-        val key = getOrCreateKey()
-        val cipher = Cipher.getInstance(TRANSFORMATION).apply {
-            init(Cipher.ENCRYPT_MODE, key)
-        }
-        val iv = cipher.iv
-        val ciphertext = cipher.doFinal(plain)
+        try {
+            val plain = json.encodeToString(AppSettings.serializer(), t).encodeToByteArray()
+            val key = getOrCreateKey()
+            val cipher = Cipher.getInstance(TRANSFORMATION).apply {
+                init(Cipher.ENCRYPT_MODE, key)
+            }
+            val iv = cipher.iv
+            val ciphertext = cipher.doFinal(plain)
 
-        val out = ByteArrayOutputStream(HEADER_SIZE + ciphertext.size).apply {
-            write(MAGIC.toInt())
-            write(VERSION)
-            write(iv)
-            write(ciphertext)
+            val out = ByteArrayOutputStream(HEADER_SIZE + ciphertext.size).apply {
+                write(MAGIC.toInt())
+                write(VERSION)
+                write(iv)
+                write(ciphertext)
+            }
+            output.write(out.toByteArray())
+        } catch (e: Exception) {
+            val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            ks.deleteEntry(KEY_ALIAS)
+            writeTo(t, output)
         }
-        output.write(out.toByteArray())
     }
 
     private fun getOrCreateKey(): SecretKey {
