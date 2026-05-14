@@ -96,11 +96,7 @@ import com.translator.app.R
 import com.translator.app.presentation.theme.AppPalette
 import com.translator.app.presentation.theme.AppThemeId
 import com.translator.app.presentation.theme.LocalAppPalette
-import com.translator.app.presentation.translator.animations.AuroraAura
-import com.translator.app.presentation.translator.animations.BerlinWaveform
 import com.translator.app.presentation.translator.animations.GemInkBloom
-import com.translator.app.presentation.translator.animations.GeminiMeshAura
-import com.translator.app.presentation.translator.animations.GptFluidVoice
 import com.translator.app.presentation.translator.animations.ObsidianOrb
 import com.translator.app.presentation.translator.animations.SakuraRipples
 import com.translator.app.presentation.translator.reveal.MessageReveal
@@ -523,17 +519,13 @@ private fun BottomControlPanel(
                     label = "animByTheme"
                 ) { themeId ->
                     when (themeId) {
-                        AppThemeId.AURORA       -> AuroraAura(palette, audioFlow, isAiSpeaking || isMicActive)
-                        AppThemeId.BERLIN_MIST  -> BerlinWaveform(palette, audioFlow, isAiSpeaking || isMicActive)
-                        AppThemeId.SAKURA       -> SakuraRipples(palette, audioFlow, isAiSpeaking || isMicActive)
-                        AppThemeId.OBSIDIAN     -> ObsidianOrb(palette, audioFlow, isAiSpeaking || isMicActive)
-                        AppThemeId.OPEN_OASIS   -> GptFluidVoice(palette, audioFlow, isAiSpeaking || isMicActive)
-                        AppThemeId.GEMINI_NEXUS -> GeminiMeshAura(palette, audioFlow, isAiSpeaking || isMicActive)
-                        AppThemeId.GEM          -> GemInkBloom(
+                        AppThemeId.OBSIDIAN -> ObsidianOrb(palette, audioFlow, isAiSpeaking || isMicActive)
+                        AppThemeId.SAKURA   -> SakuraRipples(palette, audioFlow, isAiSpeaking || isMicActive)
+                        AppThemeId.GEM      -> GemInkBloom(
                             palette = palette,
                             audioFlow = audioFlow,
                             isAiSpeaking = isAiSpeaking || isMicActive,
-                            modifier = Modifier.fillMaxSize()    // ★ занимает ВЕСЬ слот 320dp
+                            modifier = Modifier.fillMaxSize()
                         )
                     }
                 }
