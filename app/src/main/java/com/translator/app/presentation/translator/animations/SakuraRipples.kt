@@ -64,7 +64,7 @@ fun SakuraRipples(
         var prev = System.nanoTime()
         while (true) {
             withFrameNanos { now ->
-                val dt = (now - prev).coerceAtLeast(0L) / 1_000_000_000f
+                val dt = ((now - prev).coerceAtLeast(0L) / 1_000_000_000f).coerceAtMost(0.05f)
                 prev = now
 
                 val expandSpeed = 0.44f + level * 0.32f
