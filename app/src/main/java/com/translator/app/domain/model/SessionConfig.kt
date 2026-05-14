@@ -1,9 +1,5 @@
 package com.translator.app.domain.model
 
-/**
- * Декларация function calling для Gemini tool use.
- * Передаётся в setup.tools[].functionDeclarations[].
- */
 data class FunctionDeclarationConfig(
     val name: String,
     val description: String,
@@ -11,10 +7,6 @@ data class FunctionDeclarationConfig(
     val required: List<String> = emptyList()
 )
 
-/**
- * Описание параметра function declaration.
- * Типы: STRING | NUMBER | INTEGER | BOOLEAN | ARRAY | OBJECT
- */
 data class ParameterConfig(
     val type: String = "STRING",
     val description: String = "",
@@ -24,234 +16,63 @@ data class ParameterConfig(
     val required: List<String> = emptyList()
 )
 
-/**
- * Конфигурация сессии Gemini Live API v1beta.
- *
- * ДИАГНОСТИЧЕСКИЕ ФЛАГИ (sendXxx) позволяют выключать отдельные блоки
- * setup для поиска источника close code 1007 "Invalid JSON payload".
- *
- * По умолчанию все блоки включены — если 1007, используй готовые
- * профили: baselineProfile(), withoutThinkingProfile(), и т.д.
- */
 data class SessionConfig(
-
-    // ── Model ──
     val model: String = DEFAULT_MODEL,
 
-    // ── Generation Config ──
-    // 3.1: presencePenalty и frequencyPenalty удалены — не поддерживаются Live API
+    // Generation
     val responseModality: String = "AUDIO",
-    val temperature: Float = 1.0f,
+    val temperature: Float = 0.2f,
     val topP: Float = 0.95f,
-    val topK: Int = 0,
-    val maxOutputTokens: Int = 8192,
+    val maxOutputTokens: Int = 512,
 
-    // ── Speech Config ──
+    // Voice
     val voiceId: String = "Aoede",
 
-    /**
-     * BCP-47 код языка для speechConfig.languageCode.
-     * ВНИМАНИЕ: native audio output модели (gemini-3.1-flash-live-preview)
-     * АВТОМАТИЧЕСКИ выбирают язык и игнорируют это поле.
-     * Оставлено для совместимости и для legacy моделей.
-     * Для translator-режима оставляй пустым.
-     */
-    val languageCode: String = "",
-
-    // ── Thinking Config ──
-    val latencyProfile: LatencyProfile = LatencyProfile.UltraLow,
+    // Thinking
+    val latencyProfile: LatencyProfile = LatencyProfile.Off,
     val thinkingIncludeThoughts: Boolean = false,
 
-    // ── Media Resolution ──
-    val mediaResolution: String = "",
-
-    /**
-     * Поведение при обнаружении активности пользователя.
-     * START_OF_ACTIVITY_INTERRUPTS (default) — старт речи прерывает модель (barge-in).
-     * NO_INTERRUPTION — модель не прерывается.
-     */
-    val activityHandling: String = "START_OF_ACTIVITY_INTERRUPTS",
-
-    /**
-     * Что входит в "ход" пользователя:
-     *  TURN_INCLUDES_ONLY_ACTIVITY        — только обнаруженная речь
-     *  TURN_INCLUDES_ALL_INPUT            — всё аудио включая тишину
-     *  TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO — речь + все видеокадры (default в 3.1)
-     *
-     * Для translator-режима без видео — TURN_INCLUDES_ONLY_ACTIVITY экономит токены.
-     */
-    val turnCoverage: String = "TURN_INCLUDES_ONLY_ACTIVITY",
-
-    // ── VAD ──
+    // VAD
     val autoActivityDetection: Boolean = true,
-    // 3.3: HIGH sensitivity для быстрого старта/конца распознавания речи
     val vadStartSensitivity: String = "START_SENSITIVITY_HIGH",
     val vadEndSensitivity: String = "END_SENSITIVITY_HIGH",
-    val vadPrefixPaddingMs: Int = 20,
+    val vadPrefixPaddingMs: Int = 120,
     val vadSilenceDurationMs: Int = 400,
+    val activityHandling: String = "START_OF_ACTIVITY_INTERRUPTS",
+    val turnCoverage: String = "TURN_INCLUDES_ONLY_ACTIVITY",
 
-    // ── System Instruction ──
-    val systemInstruction: String = DEFAULT_SYSTEM_INSTRUCTION,
+    // System instruction
+    val systemInstruction: String = "",
 
-    // ── Transcription ──
+    // Transcription
     val inputTranscription: Boolean = true,
     val outputTranscription: Boolean = true,
-    /**
-     * Список BCP-47 кодов языков для AudioTranscriptionConfig.languageCodes.
-     * Подсказка для ASR — ограничивает спекуляцию языка.
-     * Пустой = автоопределение (по умолчанию).
-     */
     val transcriptionLanguageCodes: List<String> = emptyList(),
 
-    // ── Session Management ──
-    // 3.4: оба включены по дефолту согласно best practices
+    // Session management
     val enableSessionResumption: Boolean = true,
-    // 3.5: transparentResumption удалён — не существует в официальной спецификации
     val sessionHandle: String? = null,
     val enableContextCompression: Boolean = true,
-    val compressionTriggerTokens: Long = 25_600L,  // 80% от 32k window
-    val compressionTargetTokens: Long = 12_800L,   // 50% — оставляем место для нового хода
+    val compressionTriggerTokens: Long = 25_600L,
+    val compressionTargetTokens: Long = 12_800L,
 
-    // ── Tools ──
-    val enableGoogleSearch: Boolean = false,
-    val functionDeclarations: List<FunctionDeclarationConfig> = emptyList(),
-
-    // ── Audio behaviour ──
-    val sendAudioStreamEnd: Boolean = true,
-
-    // ── Connection timeout ──
-    val setupTimeoutMs: Long = 10_000L,
-
-    // ═══════════════════════════════════════════════════════════
-    //  ДИАГНОСТИЧЕСКИЕ ФЛАГИ для поиска источника 1007
-    // ═══════════════════════════════════════════════════════════
-
-    /**
-     * Если true — отправляется ТОЛЬКО минимальный setup:
-     *   model + responseModalities + speechConfig + systemInstruction.
-     * Все остальные блоки игнорируются, даже если их флаги true.
-     *
-     * Используй для baseline-теста.
-     */
-    val diagnosticMinimalSetup: Boolean = false,
-
-    /** Отправлять ли generationConfig.thinkingConfig */
-    val sendThinkingConfig: Boolean = true,
-
-    /** Отправлять ли temperature/topP/topK/maxTokens в generationConfig */
-    val sendGenerationParams: Boolean = true,
-
-    /** Отправлять ли realtimeInputConfig с VAD */
-    val sendVadConfig: Boolean = true,
-
-    /** Отправлять ли transcription блоки */
-    val sendTranscriptionConfig: Boolean = true,
-
-    /** Отправлять ли sessionResumption */
-    // 3.4: true по дефолту
-    val sendSessionResumptionConfig: Boolean = true,
-
-    /** Отправлять ли contextWindowCompression */
-    // 3.4: true по дефолту
-    val sendContextCompressionConfig: Boolean = true,
-
-    /** Логировать ПОЛНЫЙ JSON setup (длинный!) */
-    val logFullSetupJson: Boolean = true
+    // Setup timeout
+    val setupTimeoutMs: Long = 10_000L
 ) {
     companion object {
-
-        /**
-         * Model ID для WebSocket BidiGenerateContent.
-         * БЕЗ префикса "models/"!
-         */
+        // БЕЗ префикса "models/" — формат для WS BidiGenerateContent v1beta.
         const val DEFAULT_MODEL = "gemini-3.1-flash-live-preview"
-
-        const val DEFAULT_SYSTEM_INSTRUCTION =
-            "You are a real-time voice translator between Russian and German only. " +
-            "Rules: " +
-            "(1) If user speaks Russian — translate to German. " +
-            "(2) If user speaks German — translate to Russian. " +
-            "(3) Output ONLY the translation, no preamble, no apology, no question. " +
-            "(4) Even for a single short word, translate it immediately — never refuse. " +
-            "(5) NEVER output English, French, Polish, Korean, Chinese, Japanese, Turkish, " +
-            "Ukrainian, Belarusian, or any other language — Russian and German are the only valid outputs. " +
-            "(6) If audio is ambiguous, guess the closest Russian or German word by phonetics. " +
-            "(7) Preserve numbers and names as-is."
-
         const val INPUT_SAMPLE_RATE = 16_000
         const val OUTPUT_SAMPLE_RATE = 24_000
-
         const val WS_HOST = "generativelanguage.googleapis.com"
         const val WS_PATH = "ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
-
-        // ═════════════════════════════════════════════════════
-        //  ДИАГНОСТИЧЕСКИЕ ПРОФИЛИ — используй для поиска 1007
-        // ═════════════════════════════════════════════════════
-
-        /**
-         * 🟢 BASELINE — минимальный setup.
-         * Только model + responseModalities + speechConfig + systemInstruction.
-         *
-         * Если С ЭТИМ ПРОФИЛЕМ setup проходит и статус зелёный —
-         * значит 1007 ломает один из опциональных блоков.
-         * Далее используй withoutXxx-профили для точной локализации.
-         */
-        fun baselineProfile() = SessionConfig(
-            diagnosticMinimalSetup = true,
-            enableSessionResumption = false,
-            enableContextCompression = false,
-            inputTranscription = false,
-            outputTranscription = false,
-            logFullSetupJson = true
-        )
-
-        /** Убираем только thinking — если работает, проблема в thinkingConfig */
-        fun withoutThinkingProfile() = SessionConfig(
-            sendThinkingConfig = false,
-            logFullSetupJson = true
-        )
-
-        /** Убираем только VAD config — если работает, проблема в sensitivity-enum */
-        fun withoutVadProfile() = SessionConfig(
-            sendVadConfig = false,
-            logFullSetupJson = true
-        )
-
-        /** Убираем session mgmt — если работает, проблема в resumption/compression */
-        fun withoutSessionMgmtProfile() = SessionConfig(
-            sendSessionResumptionConfig = false,
-            sendContextCompressionConfig = false,
-            enableSessionResumption = false,
-            enableContextCompression = false,
-            logFullSetupJson = true
-        )
-
-        /** Убираем транскрипцию — если работает, проблема в transcription-блоках */
-        fun withoutTranscriptionProfile() = SessionConfig(
-            sendTranscriptionConfig = false,
-            inputTranscription = false,
-            outputTranscription = false,
-            logFullSetupJson = true
-        )
     }
 }
 
-/**
- * Профиль латентности → Gemini 3.1 thinkingLevel.
- *
- * Off       — thinkingConfig вообще НЕ отправляется. Самая быстрая реакция.
- *             Идеально для перевода и командных голосовых интерфейсов.
- * UltraLow  — "minimal" thinking. Лёгкое обдумывание перед ответом.
- * Low       — "low" thinking. Стандартное.
- * Balanced  — "medium" thinking. Для разговорных AI.
- * Reasoning — "high" thinking. Для сложных задач (математика, код, анализ).
- *
- * thinkingLevel == null означает "не отправлять блок thinkingConfig".
- */
 enum class LatencyProfile(val thinkingLevel: String?, val displayName: String) {
-    Off      (null,      "Off — мгновенный ответ"),
-    UltraLow ("minimal", "Ultra Low — minimal thinking"),
-    Low      ("low",     "Low — light thinking"),
-    Balanced ("medium",  "Balanced — medium thinking"),
-    Reasoning("high",    "Reasoning — deep thinking")
+    Off       (null,      "Off — мгновенный ответ"),
+    UltraLow  ("minimal", "Ultra Low — minimal"),
+    Low       ("low",     "Low — light"),
+    Balanced  ("medium",  "Balanced — medium"),
+    Reasoning ("high",    "Reasoning — deep")
 }
