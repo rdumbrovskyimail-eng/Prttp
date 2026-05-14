@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class AudioBufferPool(
     private val bufferSize: Int,
-    poolCapacity: Int = 12
+    poolCapacity: Int = 32
 ) {
     private val pool = ArrayBlockingQueue<ByteArray>(poolCapacity)
 
