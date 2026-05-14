@@ -309,7 +309,8 @@ class GeminiLiveClient(
         try {
             val b64 = Base64.encodeToString(chunk.data, 0, chunk.length, Base64.NO_WRAP)
             val raw = """{"realtimeInput":{"audio":{"data":"$b64","mimeType":"audio/pcm;rate=${SessionConfig.INPUT_SAMPLE_RATE}"}}}"""
-            trackSentFrame(raw)
+            val logStub = """{"realtimeInput":{"audio":{"data":"<HIDDEN_BASE64_FOR_MEM_SAFETY>","mimeType":"audio/pcm;rate=${SessionConfig.INPUT_SAMPLE_RATE}"}}}"""
+            trackSentFrame(logStub)
             webSocket?.send(raw)
         } catch (e: Exception) {
             logger.e("Audio send failed: ${e.message}")
