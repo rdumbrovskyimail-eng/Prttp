@@ -21,7 +21,6 @@ data class AppSettings(
     val temperature: Float = 0.2f,
     val topP: Float = 0.95f,
     val maxOutputTokens: Int = 512,
-    val responseModality: String = "AUDIO",
 
     // ═══════════════════ 3. VOICE ═══════════════════
     val voiceId: String = "Aoede",
