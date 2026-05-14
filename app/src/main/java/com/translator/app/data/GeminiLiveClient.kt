@@ -352,18 +352,6 @@ class GeminiLiveClient(
         trackSentFrame(raw); ws.send(raw)
     }
 
-    override fun sendActivityStart() {
-        val ws = webSocket
-        if (!isReady || ws == null) return
-        ws.send("""{"realtimeInput":{"activityStart":{}}}""")
-    }
-
-    override fun sendActivityEnd() {
-        val ws = webSocket
-        if (!isReady || ws == null) return
-        ws.send("""{"realtimeInput":{"activityEnd":{}}}""")
-    }
-
     override fun sendTurnComplete() {
         val ws = webSocket
         if (!isReady || ws == null) return
