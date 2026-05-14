@@ -298,14 +298,15 @@ class AndroidAudioEngine(
         if (!isCapturing && audioRecord == null) return
         isCapturing = false
 
+        runCatching { withTimeoutOrNull(800L) { captureJob?.cancelAndJoin() } }
+        captureJob = null
+
         val rec = audioRecord
         val aec = echoCanceler
         val ns = noiseSuppressor
         val agc = autoGainControl
 
         runCatching { rec?.stop() }
-        runCatching { withTimeoutOrNull(800L) { captureJob?.cancelAndJoin() } }
-        captureJob = null
 
         withContext(Dispatchers.IO) {
             runCatching { aec?.enabled = false; aec?.release() }; echoCanceler = null
