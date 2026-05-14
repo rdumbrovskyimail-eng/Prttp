@@ -99,6 +99,7 @@ import com.translator.app.presentation.theme.LocalAppPalette
 import com.translator.app.presentation.translator.animations.GemInkBloom
 import com.translator.app.presentation.translator.animations.ObsidianOrb
 import com.translator.app.presentation.translator.animations.SakuraRipples
+import com.translator.app.presentation.translator.components.LanguagePairSelector
 import com.translator.app.presentation.translator.reveal.MessageReveal
 import com.translator.app.presentation.translator.reveal.typewriterText
 import kotlinx.coroutines.flow.Flow
@@ -150,6 +151,15 @@ fun TranslateScreen(
                 isAiSpeaking = state.isAiSpeaking,
                 isMicActive = state.isMicActive,
                 connectionStatus = state.connectionStatus
+            )
+
+            LanguagePairSelector(
+                source = state.sourceLanguage,
+                target = state.targetLanguage,
+                onSourceChange = viewModel::setSourceLanguage,
+                onTargetChange = viewModel::setTargetLanguage,
+                onSwap = viewModel::swapLanguages,
+                modifier = Modifier.padding(top = 4.dp)
             )
 
             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
