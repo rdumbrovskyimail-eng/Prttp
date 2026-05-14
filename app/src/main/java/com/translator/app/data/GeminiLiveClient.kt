@@ -142,10 +142,7 @@ class GeminiLiveClient(
                 override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                     val desc = describeCloseCode(code)
                     logger.d("WS closed: $code $desc reason='$reason'")
-                    if (code == 1008) {
-                        logger.e("⛔ Permanent error 1008 — aborting reconnect")
-                        _events.tryEmit(GeminiEvent.ConnectionError("Permanent error: $reason"))
-                    } else if (code == 1007) {
+                    if (code == 1007 || code == 1008) {
                         synchronized(lastSentFrames) {
                             if (lastSentFrames.isNotEmpty()) {
                                 logger.e("⚠ LAST SENT FRAMES before $code:")
@@ -156,9 +153,6 @@ class GeminiLiveClient(
                     cancelSetupWatchdog()
                     isReady = false
                     closeCompletion?.complete(Unit)
-                    if (code != 1000 && code != 1001) {
-                        _events.tryEmit(GeminiEvent.ConnectionError("WS $code: $desc ${reason}"))
-                    }
                     _events.tryEmit(GeminiEvent.Disconnected(code, reason))
                 }
 
@@ -168,7 +162,7 @@ class GeminiLiveClient(
                     cancelSetupWatchdog()
                     isReady = false
                     closeCompletion?.complete(Unit)
-                    _events.tryEmit(GeminiEvent.ConnectionError(t.message ?: "Unknown WS error"))
+                    _events.tryEmit(GeminiEvent.Disconnected(1006, t.message ?: "Unknown WS error"))
                 }
             })
         }
