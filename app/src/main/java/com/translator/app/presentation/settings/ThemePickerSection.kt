@@ -1,13 +1,3 @@
-// ═══════════════════════════════════════════════════════════
-// ПОЛНАЯ ЗАМЕНА (v2.0)
-// Путь: app/src/main/java/com/translator/app/presentation/settings/ThemePickerSection.kt
-//
-// Секция выбора темы для SettingsScreen. 6 тем + живое превью
-// с реальной мини-аура-капсулой каждой палитры.
-//
-// Tap → onSelect(AppThemeId) → сохраняется в AppSettings.themeId →
-// LocalAppPalette мгновенно начинает кроссфейд (см. AppTheme.kt).
-// ═══════════════════════════════════════════════════════════
 package com.translator.app.presentation.settings
 
 import androidx.compose.animation.core.Spring
@@ -49,9 +39,7 @@ fun ThemePickerSection(
 ) {
     val palette = LocalAppPalette.current
 
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-    ) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Text(
             text = "ТЕМА И АНИМАЦИЯ ГОЛОСА",
             fontSize = 11.sp, fontWeight = FontWeight.W700,
@@ -61,27 +49,6 @@ fun ThemePickerSection(
 
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             ThemeOption(
-                preview = AppPalette.Aurora, id = AppThemeId.AURORA,
-                isSelected = selected == AppThemeId.AURORA,
-                title = "Aurora",
-                desc = "Премиум-свет. Navy → amber градиент.",
-                onClick = { onSelect(AppThemeId.AURORA) }
-            )
-            ThemeOption(
-                preview = AppPalette.BerlinMist, id = AppThemeId.BERLIN_MIST,
-                isSelected = selected == AppThemeId.BERLIN_MIST,
-                title = "Berlin Mist",
-                desc = "Холодный Nordic минимализм. Waveform.",
-                onClick = { onSelect(AppThemeId.BERLIN_MIST) }
-            )
-            ThemeOption(
-                preview = AppPalette.Sakura, id = AppThemeId.SAKURA,
-                isSelected = selected == AppThemeId.SAKURA,
-                title = "Sakura",
-                desc = "Тёплый dusty rose + teal. Капли воды.",
-                onClick = { onSelect(AppThemeId.SAKURA) }
-            )
-            ThemeOption(
                 preview = AppPalette.Obsidian, id = AppThemeId.OBSIDIAN,
                 isSelected = selected == AppThemeId.OBSIDIAN,
                 title = "Obsidian",
@@ -89,18 +56,11 @@ fun ThemePickerSection(
                 onClick = { onSelect(AppThemeId.OBSIDIAN) }
             )
             ThemeOption(
-                preview = AppPalette.OpenOasis, id = AppThemeId.OPEN_OASIS,
-                isSelected = selected == AppThemeId.OPEN_OASIS,
-                title = "Open Oasis",
-                desc = "Стиль ChatGPT Voice. Fluid morphing orb.",
-                onClick = { onSelect(AppThemeId.OPEN_OASIS) }
-            )
-            ThemeOption(
-                preview = AppPalette.GeminiNexus, id = AppThemeId.GEMINI_NEXUS,
-                isSelected = selected == AppThemeId.GEMINI_NEXUS,
-                title = "Gemini Nexus",
-                desc = "Стиль Google Gemini. Cosmic mesh aura.",
-                onClick = { onSelect(AppThemeId.GEMINI_NEXUS) }
+                preview = AppPalette.Sakura, id = AppThemeId.SAKURA,
+                isSelected = selected == AppThemeId.SAKURA,
+                title = "Sakura",
+                desc = "Тёплый dusty rose + teal. Капли воды.",
+                onClick = { onSelect(AppThemeId.SAKURA) }
             )
             ThemeOption(
                 preview = AppPalette.Gem, id = AppThemeId.GEM,
@@ -144,40 +104,25 @@ private fun ThemeOption(
         verticalAlignment = Alignment.CenterVertically
     ) {
         ThemePreview(preview)
-
         Spacer(Modifier.width(14.dp))
-
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                fontSize = 16.sp, fontWeight = FontWeight.W700,
-                color = current.textPrimary, letterSpacing = (-0.2).sp
-            )
-            Text(
-                text = desc,
-                fontSize = 12.sp, color = current.textSecondary, lineHeight = 16.sp
-            )
+            Text(title, fontSize = 16.sp, fontWeight = FontWeight.W700,
+                color = current.textPrimary, letterSpacing = (-0.2).sp)
+            Text(desc, fontSize = 12.sp, color = current.textSecondary, lineHeight = 16.sp)
         }
-
         Spacer(Modifier.width(8.dp))
-
         Box(
             modifier = Modifier
                 .size(20.dp)
                 .clip(CircleShape)
                 .background(if (isSelected) current.accentPrimary else Color.Transparent)
-                .border(
-                    width = 1.5.dp,
-                    color = if (isSelected) current.accentPrimary else current.border,
-                    shape = CircleShape
-                ),
+                .border(1.5.dp,
+                    if (isSelected) current.accentPrimary else current.border,
+                    CircleShape),
             contentAlignment = Alignment.Center
         ) {
             if (isSelected) {
-                Box(
-                    modifier = Modifier.size(8.dp).clip(CircleShape)
-                        .background(current.textOnAccent)
-                )
+                Box(Modifier.size(8.dp).clip(CircleShape).background(current.textOnAccent))
             }
         }
     }
@@ -193,7 +138,6 @@ private fun ThemePreview(preview: AppPalette) {
             .border(0.5.dp, preview.border, RoundedCornerShape(12.dp)),
         contentAlignment = Alignment.Center
     ) {
-        // Мини-капсула с реальным градиентом палитры — выглядит как уменьшенная Aurora
         Box(
             modifier = Modifier
                 .size(width = 60.dp, height = 14.dp)
