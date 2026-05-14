@@ -418,6 +418,21 @@ class GeminiLiveClient(
                 return
             }
 
+            root["toolCall"]?.jsonObject?.let { tc ->
+                val calls = tc["functionCalls"]?.jsonArray?.mapNotNull { fc ->
+                    val obj = fc.jsonObject
+                    val name = obj["name"]?.jsonPrimitive?.content ?: return@mapNotNull null
+                    val id = obj["id"]?.jsonPrimitive?.content ?: return@mapNotNull null
+                    val args = obj["args"]?.jsonObject?.mapValues { it.value.jsonPrimitive.content } ?: emptyMap()
+                    com.translator.app.domain.model.FunctionCall(name, id, args)
+                } ?: emptyList()
+
+                if (calls.isNotEmpty()) {
+                    _events.tryEmit(GeminiEvent.ToolCall(calls))
+                }
+                return
+            }
+
             root["sessionResumptionUpdate"]?.jsonObject?.let { update ->
                 val resumable = update["resumable"]?.jsonPrimitive?.booleanOrNull ?: false
                 val newHandle = update["newHandle"]?.jsonPrimitive?.content
