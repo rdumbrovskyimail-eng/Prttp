@@ -1,21 +1,5 @@
 package com.translator.app.domain.model
 
-data class FunctionDeclarationConfig(
-    val name: String,
-    val description: String,
-    val parameters: Map<String, ParameterConfig> = emptyMap(),
-    val required: List<String> = emptyList()
-)
-
-data class ParameterConfig(
-    val type: String = "STRING",
-    val description: String = "",
-    val enumValues: List<String> = emptyList(),
-    val items: ParameterConfig? = null,
-    val properties: Map<String, ParameterConfig> = emptyMap(),
-    val required: List<String> = emptyList()
-)
-
 data class SessionConfig(
     val model: String = DEFAULT_MODEL,
 
