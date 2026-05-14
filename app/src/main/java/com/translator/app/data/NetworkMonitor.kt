@@ -30,11 +30,6 @@ class NetworkMonitor @Inject constructor(
                 trySend(ok)
             }
         }
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
-        runCatching { cm.registerNetworkCallback(request, callback) }
-
         // Начальное состояние.
         val initial = runCatching {
             val active = cm.activeNetwork
@@ -42,6 +37,11 @@ class NetworkMonitor @Inject constructor(
             caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
         }.getOrDefault(false)
         trySend(initial)
+
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        runCatching { cm.registerNetworkCallback(request, callback) }
 
         awaitClose { runCatching { cm.unregisterNetworkCallback(callback) } }
     }.conflate().distinctUntilChanged()
