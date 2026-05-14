@@ -63,8 +63,14 @@ class GeminiLiveClient(
     )
     override val events: Flow<GeminiEvent> = _events.asSharedFlow()
 
-    @Volatile override var sessionHandle: String? = null; private set
-    @Volatile override var isReady: Boolean = false; private set
+    @Volatile override var sessionHandle: String? = null
+        private set
+
+    @Volatile override var isReady: Boolean = false
+        private set
+
+    // Защита коннекта (ровно с новой строки)
+    private val connectionMutex = kotlinx.coroutines.sync.Mutex()
 
     @Volatile private var logRawFrames: Boolean = false
     @Volatile private var droppedAudioChunks: Long = 0L
@@ -75,9 +81,9 @@ class GeminiLiveClient(
     @Volatile private var activeTurnId: Long = 0L
 
     private var currentConfig: SessionConfig? = null
-    private val connectionMutex = kotlinx.coroutines.sync.Mutex()
     
-    @Volatile private var closeCompletion: CompletableDeferred<Unit>? = null    @Volatile private var setupWatchdog: Job? = null
+    @Volatile private var closeCompletion: CompletableDeferred<Unit>? = null
+    @Volatile private var setupWatchdog: Job? = null
 
     private val lastSentFrames = java.util.ArrayDeque<String>(3)
 
