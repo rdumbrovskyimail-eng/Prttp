@@ -327,16 +327,25 @@ class TranslatorViewModel @Inject constructor(
                     }
                     is GeminiEvent.InputTranscript -> {
                         val pairId = currentOpenPairId ?: openNewPair()
+                        val src = _state.value.sourceLanguage
+                        val tgt = _state.value.targetLanguage
                         updatePair(pairId) {
                             val nt = it.originalText + event.text
-                            it.copy(originalText = nt, originalLang = detectLang(nt))
+                            val lang = pickLangLabel(nt, src, tgt)
+                            it.copy(originalText = nt, originalLang = lang)
                         }
                     }
                     is GeminiEvent.OutputTranscript -> {
                         val pairId = currentOpenPairId ?: openNewPair()
+                        val src = _state.value.sourceLanguage
+                        val tgt = _state.value.targetLanguage
                         updatePair(pairId) {
                             val nt = it.translationText + event.text
-                            it.copy(translationText = nt, translationLang = detectLang(nt))
+                            // Translation language = противоположный от оригинала.
+                            val originalLangCode = it.originalLang.lowercase()
+                            val translationLang = if (originalLangCode == src.code) tgt.code.uppercase()
+                                                  else src.code.uppercase()
+                            it.copy(translationText = nt, translationLang = translationLang)
                         }
                         hasModelOutputThisTurn.set(true)
                         startStuckTurnWatchdog()
@@ -499,10 +508,73 @@ class TranslatorViewModel @Inject constructor(
         }
     }
 
-    private fun detectLang(text: String): String {
+    /**
+     * Определяет, к какому из двух выбранных языков ближе фрагмент текста.
+     * Возвращает code в UPPERCASE для отображения метки (RU, DE, IT, AR…).
+     *
+     * Стратегия (без тяжёлого NLP):
+     * - Кириллица → выбираем тот из (src, tgt), у которого скрипт = кириллица.
+     * - Арабские/китайские/девангари и т.п. → аналогично по доминирующему скрипту.
+     * - В остальных случаях (латиница) → совпадает с src если src = латинский, иначе tgt.
+     */
+    private fun pickLangLabel(text: String, src: Language, tgt: Language): String {
         if (text.isBlank()) return ""
-        val hasCyr = text.any { it in 'а'..'я' || it in 'А'..'Я' || it == 'ё' || it == 'Ё' || it in "іїєґўІЇЄҐЎ" }
-        return if (hasCyr) "RU" else "DE"
+        val script = dominantScript(text)
+        val srcScript = scriptForCode(src.code)
+        val tgtScript = scriptForCode(tgt.code)
+        val matched = when {
+            script != null && script == srcScript -> src.code
+            script != null && script == tgtScript -> tgt.code
+            else -> src.code  // fallback: считаем что это source-фраза
+        }
+        return matched.uppercase()
+    }
+
+    private fun dominantScript(text: String): String? {
+        var cyr = 0; var lat = 0; var arab = 0; var han = 0
+        var deva = 0; var thai = 0; var hira = 0; var hang = 0
+        for (ch in text) {
+            when {
+                ch in '\u0400'..'\u04FF' -> cyr++
+                ch in 'a'..'z' || ch in 'A'..'Z' -> lat++
+                ch in '\u0600'..'\u06FF' -> arab++
+                ch in '\u4E00'..'\u9FFF' -> han++
+                ch in '\u0900'..'\u097F' -> deva++
+                ch in '\u0E00'..'\u0E7F' -> thai++
+                ch in '\u3040'..'\u30FF' -> hira++
+                ch in '\uAC00'..'\uD7AF' -> hang++
+            }
+        }
+        val counts = listOf("cyr" to cyr, "lat" to lat, "arab" to arab, "han" to han,
+            "deva" to deva, "thai" to thai, "hira" to hira, "hang" to hang)
+        val (winner, count) = counts.maxBy { it.second }
+        return if (count > 0) winner else null
+    }
+
+    private fun scriptForCode(code: String): String = when (code) {
+        "ru", "uk", "mn", "kk", "bg", "sr", "be" -> "cyr"
+        "ar", "fa", "ur", "ps", "prs", "azb", "ku", "kmr", "skr",
+        "arz", "apc", "apd", "arq", "ars", "aec", "acm" -> "arab"
+        "zh", "yue", "wuu", "hak", "cjy", "gan", "nan" -> "han"
+        "hi", "mr", "bho", "mai", "ne", "sa" -> "deva"
+        "th", "tts" -> "thai"
+        "ja" -> "hira"
+        "ko" -> "hang"
+        "bn", "as" -> "beng"
+        "ta", "taml" -> "taml"
+        "te" -> "telu"
+        "kn" -> "knda"
+        "ml" -> "mlym"
+        "gu" -> "gujr"
+        "or" -> "orya"
+        "pa" -> "guru"
+        "si" -> "sinh"
+        "my" -> "mymr"
+        "km" -> "khmr"
+        "am" -> "ethi"
+        "he" -> "hebr"
+        "el" -> "grek"
+        else -> "lat"
     }
 
     private fun startStuckTurnWatchdog() {
