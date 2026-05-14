@@ -81,56 +81,44 @@ class SettingsViewModel @Inject constructor(
                 .url("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$apiKey")
                 .build()
 
-            var isResolved = false
+            val isResolved = java.util.concurrent.atomic.AtomicBoolean(false)
+            val normalized = if (modelName.startsWith("models/")) modelName else "models/$modelName"
+
+            fun resolve(state: ModelTestState, err: String? = null, onSuccess: Boolean = false) {
+                if (!isResolved.compareAndSet(false, true)) return
+                _modelTestState.value = state
+                _modelTestError.value = err
+                if (onSuccess) {
+                    update { copy(model = modelName) }
+                    viewModelScope.launch(Dispatchers.Main) { onSuccessClearCustom() }
+                }
+            }
 
             val ws = client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(ws: WebSocket, response: Response) {
-                    // Отправляем минимальный setup frame с проверяемой моделью
-                    val normalized = if (modelName.startsWith("models/")) modelName else "models/$modelName"
-                    val setupJson = """{"setup": {"model": "$normalized"}}"""
-                    ws.send(setupJson)
+                    ws.send("""{"setup": {"model": "$normalized"}}""")
                 }
-
                 override fun onMessage(ws: WebSocket, text: String) {
-                    // Если сервер прислал setupComplete, значит модель существует и поддерживает Live API
                     if (text.contains("setupComplete")) {
-                        if (!isResolved) {
-                            isResolved = true
-                            _modelTestState.value = ModelTestState.SUCCESS
-                            update { copy(model = modelName) }
-                            
-                            // Переключаемся на Main поток для вызова UI-коллбэка
-                            launch(Dispatchers.Main) { onSuccessClearCustom() }
-                            ws.close(1000, "ok")
-                        }
+                        resolve(ModelTestState.SUCCESS, onSuccess = true)
+                        ws.close(1000, "ok")
                     }
                 }
-
                 override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-                    if (!isResolved) {
-                        isResolved = true
-                        _modelTestState.value = ModelTestState.ERROR
-                        _modelTestError.value = "Ошибка $code: $reason"
-                    }
+                    resolve(ModelTestState.ERROR, "Ошибка $code: $reason")
                 }
-
                 override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                    if (!isResolved) {
-                        isResolved = true
-                        _modelTestState.value = ModelTestState.ERROR
-                        _modelTestError.value = t.message ?: "Ошибка сети"
-                    }
+                    resolve(ModelTestState.ERROR, t.message ?: "Ошибка сети")
                 }
             })
 
-            // Таймаут 6 секунд на случай, если сервер завис
             delay(6000)
-            if (!isResolved) {
-                isResolved = true
-                _modelTestState.value = ModelTestState.ERROR
-                _modelTestError.value = "Таймаут ответа от сервера"
+            if (!isResolved.get()) {
+                resolve(ModelTestState.ERROR, "Таймаут ответа от сервера")
                 ws.cancel()
             }
+            client.dispatcher.executorService.shutdown()
+            client.connectionPool.evictAll()
         }
     }
 }
