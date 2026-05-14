@@ -61,7 +61,7 @@ class AndroidAudioEngine(
 
     private val _playbackSync = MutableSharedFlow<ByteArray>(
         replay = 0, extraBufferCapacity = 128,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST
+        onBufferOverflow = BufferOverflow.SUSPEND
     )
     override val playbackSync: Flow<ByteArray> = _playbackSync.asSharedFlow()
 
