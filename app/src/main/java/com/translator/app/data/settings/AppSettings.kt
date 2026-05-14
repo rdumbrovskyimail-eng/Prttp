@@ -59,8 +59,11 @@ data class AppSettings(
     // ═══════════════════ 7. TRANSCRIPTION ═══════════════════
     val inputTranscription: Boolean = true,
     val outputTranscription: Boolean = true,
-    // ASR-подсказка реально отправляется в setup (см. GeminiLiveClient).
     val transcriptionLanguageCodes: List<String> = listOf("ru-RU", "de-DE"),
+
+    // ═══════════════════ 7.1 TRANSLATION PAIR ═══════════════════
+    val sourceLanguageCode: String = "ru",
+    val targetLanguageCode: String = "de",
 
     // ═══════════════════ 8. THINKING / LATENCY ═══════════════════
     val latencyProfile: String = "Off",
