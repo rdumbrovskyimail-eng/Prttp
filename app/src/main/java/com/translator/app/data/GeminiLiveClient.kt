@@ -207,8 +207,6 @@ class GeminiLiveClient(
     override suspend fun disconnect() {
         connectionMutex.withLock {
             internalDisconnect()
-            client.dispatcher.executorService.shutdown()
-            client.connectionPool.evictAll()
         }
     }
 
