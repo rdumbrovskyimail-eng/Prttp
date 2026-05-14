@@ -16,8 +16,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -50,31 +48,32 @@ class LogBuffer @Inject constructor() {
     }
 
     private val deque = ArrayDeque<LogEntry>()
-    private val mutex = Mutex()
     private val _entries = MutableStateFlow<List<LogEntry>>(emptyList())
     val entries: StateFlow<List<LogEntry>> = _entries.asStateFlow()
 
-    suspend fun append(level: LogLevel, message: String, throwable: Throwable? = null) = mutex.withLock {
-        val entry = LogEntry(
-            timestamp = System.currentTimeMillis(),
-            level = level,
-            message = message,
-            throwable = throwable?.let { "${it.javaClass.simpleName}: ${it.message}" },
-        )
-        deque.addLast(entry)
-        while (deque.size > MAX_SIZE) {
-            deque.removeFirst()
+    fun append(level: LogLevel, message: String, throwable: Throwable? = null) {
+        synchronized(this) {
+            val entry = LogEntry(
+                timestamp = System.currentTimeMillis(),
+                level = level,
+                message = message,
+                throwable = throwable?.let { "${it.javaClass.simpleName}: ${it.message}" },
+            )
+            deque.addLast(entry)
+            while (deque.size > MAX_SIZE) deque.removeFirst()
+            _entries.value = deque.toList()
         }
-        _entries.value = deque.toList()
     }
 
-    suspend fun clear() = mutex.withLock {
-        deque.clear()
-        _entries.value = emptyList()
+    fun clear() {
+        synchronized(this) {
+            deque.clear()
+            _entries.value = emptyList()
+        }
     }
 
     /** Экспортировать все логи в строку для копирования/шаринга. */
-    suspend fun exportAsText(): String = mutex.withLock {
+    fun exportAsText(): String = synchronized(this) {
         buildString {
             deque.forEach { appendLine(it.formatted()) }
         }
