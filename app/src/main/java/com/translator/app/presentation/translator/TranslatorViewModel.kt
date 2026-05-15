@@ -610,6 +610,18 @@ class TranslatorViewModel @Inject constructor(
         }
     }
 
+    // ─────────────────────────────────────────────────────────────
+    fun exportTranscriptLog(): String {
+        val entries = _state.value.transcriptLog
+        if (entries.isEmpty()) return "Лог пуст"
+        return buildString {
+            appendLine("═══ TRANSCRIPT LOG (${entries.size} entries) ═══")
+            appendLine("Экспорт: ${java.text.SimpleDateFormat("dd.MM.yyyy HH:mm:ss", java.util.Locale.ROOT).format(java.util.Date())}")
+            appendLine()
+            entries.forEach { appendLine(it.formatted()) }
+        }
+    }
+
     /**
      * Определяет, к какому из двух выбранных языков ближе фрагмент текста.
      */
