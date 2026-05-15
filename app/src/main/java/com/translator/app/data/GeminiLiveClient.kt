@@ -82,7 +82,7 @@ class GeminiLiveClient(
 
     private var currentConfig: SessionConfig? = null
     private var reconnectAttempts: Int = 0
-    
+
     @Volatile private var closeCompletion: CompletableDeferred<Unit>? = null
     @Volatile private var setupWatchdog: Job? = null
 
@@ -103,6 +103,15 @@ class GeminiLiveClient(
         connectionMutex.withLock {
             if (webSocket != null) internalDisconnect()
 
+            // Если caller явно не передал handle (config.sessionHandle == null),
+            // дополнительно подстраховываемся: обнуляем наш кэшированный handle,
+            // чтобы исключить любую возможность непроизвольного resume в случае,
+            // если parseServerMessage уже успел установить новый handle между
+            // disconnect и connect.
+            if (config.sessionHandle == null) {
+                sessionHandle = null
+            }
+
             currentConfig = config
             logRawFrames = logRaw
             isReady = false
@@ -112,7 +121,8 @@ class GeminiLiveClient(
 
             val encodedKey = java.net.URLEncoder.encode(apiKey, "UTF-8")
             val url = "wss://${SessionConfig.WS_HOST}/${SessionConfig.WS_PATH}?key=$encodedKey"
-            logger.d("Connecting to ${config.model}…")
+            val handleInfo = if (config.sessionHandle != null) "with handle" else "FRESH (no handle)"
+            logger.d("Connecting to ${config.model} — $handleInfo…")
 
             val request = Request.Builder().url(url).build()
 
@@ -197,11 +207,37 @@ class GeminiLiveClient(
         // Любые stale-chunki после disconnect игнорируются.
         activeTurnId = currentTurnId.incrementAndGet()
     }
-    
+
     override suspend fun disconnect() {
         connectionMutex.withLock {
             internalDisconnect()
         }
+    }
+
+    /**
+     * Сбрасывает локально хранимый sessionHandle, чтобы СЛЕДУЮЩИЙ connect()
+     * стартовал свежую сессию вместо restore из server-side кеша.
+     *
+     * Согласно официальной документации Gemini Live API, серверного API для
+     * "удаления" сессии нет — старый handle просто протухает (resumption
+     * tokens живут 2 часа после последнего termination, сами сессии — 24 часа).
+     * Поэтому единственное, что мы можем и должны сделать на клиенте — это
+     * НЕ передавать handle при следующем setup-сообщении, и сервер начнёт
+     * полностью новый контекст с новым system instruction.
+     *
+     * НЕ блокирующий, НЕ суспендирующий — безопасно вызывать с любого потока.
+     */
+    override fun resetSession() {
+        val had = sessionHandle != null
+        sessionHandle = null
+        // На случай, если в текущем currentConfig висит старый handle —
+        // обнуляем и его, чтобы автореконнект из observer'а тоже стартовал fresh.
+        currentConfig?.let { cfg ->
+            if (cfg.sessionHandle != null) {
+                currentConfig = cfg.copy(sessionHandle = null)
+            }
+        }
+        if (had) logger.d("🧹 Session handle cleared — next connect() will start fresh")
     }
 
     // ════════════════════════════════════════════════════════════
@@ -283,6 +319,8 @@ class GeminiLiveClient(
             }
 
             // ─── Session Resumption ───
+            // Если sessionResumption включён, но handle == null — сервер начнёт
+            // НОВУЮ сессию (это и есть желаемое поведение при смене языка).
             if (config.enableSessionResumption) {
                 put("sessionResumption", buildJsonObject {
                     config.sessionHandle?.let { put("handle", it) }
