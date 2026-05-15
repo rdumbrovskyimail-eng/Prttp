@@ -69,6 +69,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -238,6 +239,18 @@ private fun TopBar(
             Icon(
                 Icons.AutoMirrored.Filled.List,
                 contentDescription = stringResource(R.string.cd_logs),
+                tint = palette.textPrimary
+            )
+        }
+        IconButton(onClick = {
+            val log = viewModel.exportTranscriptLog()
+            val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("transcript", log))
+            android.widget.Toast.makeText(context, "Транскрипт скопирован", android.widget.Toast.LENGTH_SHORT).show()
+        }) {
+            Icon(
+                Icons.Filled.Subtitles,
+                contentDescription = "Экспорт транскрипта",
                 tint = palette.textPrimary
             )
         }
