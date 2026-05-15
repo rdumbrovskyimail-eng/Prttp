@@ -426,7 +426,7 @@ class TranslatorViewModel @Inject constructor(
                         val pairId = currentOpenPairId ?: openNewPair()
                         updatePair(pairId) {
                             val nt = it.originalText + event.text
-                            it.copy(originalText = nt, originalLang = detectLang(nt))
+                            it.copy(originalText = nt, originalLang = pickLangLabel(nt, _state.value.sourceLanguage, _state.value.targetLanguage))
                         }
                     }
 
@@ -447,7 +447,7 @@ class TranslatorViewModel @Inject constructor(
                         val pairId = currentOpenPairId ?: openNewPair()
                         updatePair(pairId) {
                             val nt = it.translationText + event.text
-                            it.copy(translationText = nt, translationLang = detectLang(nt))
+                            it.copy(translationText = nt, translationLang = pickLangLabel(nt, _state.value.sourceLanguage, _state.value.targetLanguage))
                         }
                         hasModelOutputThisTurn.set(true)
                         startStuckTurnWatchdog()
