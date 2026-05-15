@@ -410,28 +410,42 @@ class TranslatorViewModel @Inject constructor(
                         startStuckTurnWatchdog()
                     }
                     is GeminiEvent.InputTranscript -> {
-                        _state.update { it.copy(lastInputTranscript = event.text, transcriptLog = it.transcriptLog + TranscriptEntry(direction = TranscriptDirection.INPUT, text = event.text)) }
+                        // Лог
+                        logger.i("📝 INPUT  TRANSCRIPT: ${event.text}")
+                        val entry = TranscriptEntry(
+                            direction = TranscriptDirection.INPUT,
+                            text = event.text
+                        )
+                        _state.update { it.copy(
+                            lastInputTranscript = event.text,
+                            transcriptLog = (it.transcriptLog + entry).takeLast(200)
+                        )}
+
+                        // Существующая логика пар
                         val pairId = currentOpenPairId ?: openNewPair()
-                        val src = _state.value.sourceLanguage
-                        val tgt = _state.value.targetLanguage
                         updatePair(pairId) {
                             val nt = it.originalText + event.text
-                            val lang = pickLangLabel(nt, src, tgt)
-                            it.copy(originalText = nt, originalLang = lang)
+                            it.copy(originalText = nt, originalLang = detectLang(nt))
                         }
                     }
+
                     is GeminiEvent.OutputTranscript -> {
-                        _state.update { it.copy(lastOutputTranscript = event.text, transcriptLog = it.transcriptLog + TranscriptEntry(direction = TranscriptDirection.OUTPUT, text = event.text)) }
+                        // Лог
+                        logger.i("📝 OUTPUT TRANSCRIPT: ${event.text}")
+                        val entry = TranscriptEntry(
+                            direction = TranscriptDirection.OUTPUT,
+                            text = event.text
+                        )
+                        _state.update { it.copy(
+                            lastOutputTranscript = event.text,
+                            transcriptLog = (it.transcriptLog + entry).takeLast(200)
+                        )}
+
+                        // Существующая логика пар
                         val pairId = currentOpenPairId ?: openNewPair()
-                        val src = _state.value.sourceLanguage
-                        val tgt = _state.value.targetLanguage
                         updatePair(pairId) {
                             val nt = it.translationText + event.text
-                            // Translation language = противоположный от оригинала.
-                            val originalLangCode = it.originalLang.lowercase()
-                            val translationLang = if (originalLangCode == src.code) tgt.code.uppercase()
-                                                  else src.code.uppercase()
-                            it.copy(translationText = nt, translationLang = translationLang)
+                            it.copy(translationText = nt, translationLang = detectLang(nt))
                         }
                         hasModelOutputThisTurn.set(true)
                         startStuckTurnWatchdog()
