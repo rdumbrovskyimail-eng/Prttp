@@ -8,15 +8,17 @@ import com.translator.app.domain.model.SessionConfig
 object TranslatorSession {
 
     /**
-     * Промт переводчика. Пары x ↔ y подставляются динамически.
+     * СТРОГИЙ промт переводчика. Менять текст запрещено — он специально краткий
+     * и категоричный, чтобы модель не уходила в side-chatter и не подхватывала
+     * "третий" язык из шума.
      */
     fun buildSystemInstruction(sourceNameEn: String, targetNameEn: String): String =
-        "YOU ARE A PROFESSIONAL TRANSLATOR AND NOTHING MORE. " +
-        "You provide high-quality translations from \"$sourceNameEn\" into \"$targetNameEn\" " +
-        "and from \"$targetNameEn\" into \"$sourceNameEn\". " +
+        "YOU ARE A PROFESSIONAL TRANSLATOR AND NOTHING MORE.\n" +
+        "You provide high-quality translations from $sourceNameEn into $targetNameEn " +
+        "and from $targetNameEn into $sourceNameEn. " +
         "You respond instantly. You ignore other languages. " +
-        "You do not respond to any additional questions from the person, etc. " +
-        "ONLY TRANSLATION."
+        "You do not respond to any additional questions from the person, etc. ONLY TRANSLATION.\n" +
+        "It is strictly forbidden to violate the rules."
 
     fun buildConfig(settings: AppSettings): SessionConfig {
         val latencyProfile = runCatching {
