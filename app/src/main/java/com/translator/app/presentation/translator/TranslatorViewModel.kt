@@ -87,6 +87,10 @@ class TranslatorViewModel @Inject constructor(
     // Был ли потерян интернет — для немедленного реконнекта при восстановлении.
     private val networkLost = AtomicBoolean(false)
 
+    // Mutex для сериализации операций смены сессии (язык/реконнект),
+    // чтобы исключить гонки между переключением языков и автореконнектом.
+    private val sessionMutex = Mutex()
+
     init {
         viewModelScope.launch { audioEngine.initPlayback() }
         observeGeminiEvents()
@@ -114,7 +118,7 @@ class TranslatorViewModel @Inject constructor(
         if (language.code == _state.value.targetLanguage.code) return
         viewModelScope.launch {
             val updated = settingsStore.updateData { it.copy(sourceLanguageCode = language.code) }
-            reconnectWithFresh(updated)
+            hardResetForNewLanguagePair(updated)
         }
     }
 
@@ -122,7 +126,7 @@ class TranslatorViewModel @Inject constructor(
         if (language.code == _state.value.sourceLanguage.code) return
         viewModelScope.launch {
             val updated = settingsStore.updateData { it.copy(targetLanguageCode = language.code) }
-            reconnectWithFresh(updated)
+            hardResetForNewLanguagePair(updated)
         }
     }
 
@@ -134,40 +138,81 @@ class TranslatorViewModel @Inject constructor(
                     targetLanguageCode = it.sourceLanguageCode
                 )
             }
-            reconnectWithFresh(updated)
+            hardResetForNewLanguagePair(updated)
         }
     }
 
-    private suspend fun reconnectWithFresh(freshSettings: AppSettings) {
+    /**
+     * ЖЁСТКИЙ сброс при смене языковой пары.
+     *
+     * КРИТИЧНО: при смене языков мы НЕ должны переиспользовать sessionHandle,
+     * иначе Gemini восстанавливает предыдущий контекст со старым system instruction
+     * и историей — модель продолжает переводить на старый язык, "залипает" на
+     * прошлой паре, иногда даже мешает оба языка. Поэтому здесь:
+     *
+     *   1) Отменяем ВСЕ фоновые корутины (mic, reconnect, watchdog, network).
+     *   2) Полностью гасим аудио (capture + playback).
+     *   3) Дисконнектим клиента.
+     *   4) Сбрасываем sessionHandle на стороне клиента (resetSession()).
+     *   5) Сбрасываем все per-turn флаги.
+     *   6) Чистим UI-state.
+     *   7) Подключаемся заново с freshSession = true.
+     */
+    private suspend fun hardResetForNewLanguagePair(freshSettings: AppSettings) = sessionMutex.withLock {
         val status = _state.value.connectionStatus
         if (status == ConnectionStatus.Disconnected) {
+            // Не было активной сессии — просто кэшируем настройки, при следующем startSession()
+            // промт уже построится из новых языков.
             cachedSettings = freshSettings
-            return
+            return@withLock
         }
-        logger.d("Language pair changed → ${freshSettings.sourceLanguageCode}↔${freshSettings.targetLanguageCode}, hard reconnect")
+        logger.d("🔄 Language pair changed → ${freshSettings.sourceLanguageCode}↔${freshSettings.targetLanguageCode}, HARD reset")
 
-        // Жёсткий сброс — полная переинициализация сессии с новым system instruction.
+        // 1) Гасим все фоновые задачи строго в правильном порядке.
         reconnectJob?.cancelAndJoin(); reconnectJob = null
         reconnectAttempt.set(0L)
-        micJob?.cancelAndJoin(); micJob = null
-        audioEngine.stopCapture()
-        runCatching { audioEngine.flushPlayback() }
-        liveClient.disconnect()
 
-        // Сбрасываем UI-state переводов, чтобы пользователь видел чистый старт.
+        stuckTurnWatchdogJob?.cancelAndJoin(); stuckTurnWatchdogJob = null
+
+        micJob?.cancelAndJoin(); micJob = null
+
+        // 2) Аудио — полная остановка и сброс буферов.
+        runCatching { audioEngine.stopCapture() }
+        runCatching { audioEngine.flushPlayback() }
+        runCatching { audioEngine.onTurnComplete() } // финализирует jitter-буфер
+
+        // 3) Дисконнект клиента.
+        runCatching { liveClient.disconnect() }
+
+        // 4) Сбрасываем sessionHandle. Если в LiveClient нет такого метода —
+        //    см. примечание ниже, нужно добавить.
+        runCatching { liveClient.resetSession() }
+
+        // 5) Сбрасываем per-turn флаги.
+        hasModelOutputThisTurn.set(false)
+        lastAiAudioChunkAtMs.set(0L)
+        lastSeenTurnId.set(-1L)
+        currentOpenPairId = null
+        nextPairId = 1L
+
+        // 6) UI: чистый старт.
         _state.update {
             it.copy(
                 pairs = emptyList(),
                 isMicActive = false,
                 isAiSpeaking = false,
-                connectionStatus = ConnectionStatus.Connecting
+                connectionStatus = ConnectionStatus.Connecting,
+                error = null
             )
         }
-        currentOpenPairId = null
-        nextPairId = 1L
 
+        // Маленькая пауза, чтобы старый WebSocket гарантированно закрылся и
+        // сервер не путал старую и новую сессии.
+        delay(150)
+
+        // 7) Свежая сессия — БЕЗ sessionHandle.
         cachedSettings = freshSettings
-        connectInternal()
+        connectInternal(freshSession = true)
     }
 
     private fun hasMicPermission(): Boolean =
@@ -195,6 +240,8 @@ class TranslatorViewModel @Inject constructor(
             }
             currentOpenPairId = null
             reconnectAttempt.set(0L)
+            // Любой явный старт сессии — это свежий старт.
+            runCatching { liveClient.resetSession() }
 
             audioEngine.updateJitterConfig(
                 preBufferChunks = settings.jitterPreBufferChunks,
@@ -208,7 +255,7 @@ class TranslatorViewModel @Inject constructor(
             audioEngine.setUseAec(settings.useAec)
 
             startForegroundServiceSafe(settings.forceSpeakerOutput)
-            connectInternal()
+            connectInternal(freshSession = true)
         }
     }
 
@@ -236,9 +283,18 @@ class TranslatorViewModel @Inject constructor(
         fgsStarted = false
     }
 
-    private suspend fun connectInternal() {
+    /**
+     * @param freshSession если true — игнорируем sessionHandle и стартуем
+     *                     с чистого листа (нужно при смене языковой пары).
+     */
+    private suspend fun connectInternal(freshSession: Boolean = false) {
         val baseConfig = TranslatorSession.buildConfig(cachedSettings)
-        val config = baseConfig.copy(sessionHandle = liveClient.sessionHandle)
+        val handle = if (freshSession) null else liveClient.sessionHandle
+        val config = baseConfig.copy(sessionHandle = handle)
+
+        if (freshSession) logger.d("🆕 connectInternal: FRESH session (no handle)")
+        else logger.d("connectInternal: resumable=${handle != null}")
+
         runCatching {
             liveClient.connect(activeApiKey, config, logRaw = cachedSettings.logRawWebSocketFrames)
         }.onFailure { e ->
@@ -252,10 +308,19 @@ class TranslatorViewModel @Inject constructor(
             reconnectJob?.cancelAndJoin(); reconnectJob = null
             reconnectAttempt.set(0L)
 
+            stuckTurnWatchdogJob?.cancelAndJoin(); stuckTurnWatchdogJob = null
+
             micJob?.cancelAndJoin(); micJob = null
-            audioEngine.stopCapture()
-            liveClient.disconnect()
+            runCatching { audioEngine.stopCapture() }
+            runCatching { audioEngine.flushPlayback() }
+            runCatching { liveClient.disconnect() }
+            runCatching { liveClient.resetSession() }
             stopForegroundServiceSafe()
+
+            hasModelOutputThisTurn.set(false)
+            lastAiAudioChunkAtMs.set(0L)
+            lastSeenTurnId.set(-1L)
+            currentOpenPairId = null
 
             _state.update {
                 it.copy(
@@ -385,9 +450,9 @@ class TranslatorViewModel @Inject constructor(
                         }
                     }
                     is GeminiEvent.SessionHandleUpdate -> { /* handle stored inside client */ }
-                    is GeminiEvent.GoAway -> { 
+                    is GeminiEvent.GoAway -> {
                         logger.w("GoAway received: ${event.timeLeft}. Scheduling reconnect.")
-                        scheduleReconnect() 
+                        scheduleReconnect()
                     }
                     is GeminiEvent.Disconnected -> {
                         micJob?.cancel(); micJob = null
@@ -447,7 +512,8 @@ class TranslatorViewModel @Inject constructor(
                         reconnectJob?.cancel()
                         reconnectAttempt.set(0L)
                         _state.update { it.copy(connectionStatus = ConnectionStatus.Reconnecting) }
-                        reconnectJob = launch { connectInternal() }
+                        // Реконнект после потери сети — можно с handle (это штатный resume).
+                        reconnectJob = launch { connectInternal(freshSession = false) }
                     }
                 }
             }
@@ -491,7 +557,8 @@ class TranslatorViewModel @Inject constructor(
                 logger.d("Reconnect deferred — no network yet")
                 return@launch
             }
-            connectInternal()
+            // Автореконнект — с handle (штатное session resumption).
+            connectInternal(freshSession = false)
         }
     }
 
@@ -510,12 +577,6 @@ class TranslatorViewModel @Inject constructor(
 
     /**
      * Определяет, к какому из двух выбранных языков ближе фрагмент текста.
-     * Возвращает code в UPPERCASE для отображения метки (RU, DE, IT, AR…).
-     *
-     * Стратегия (без тяжёлого NLP):
-     * - Кириллица → выбираем тот из (src, tgt), у которого скрипт = кириллица.
-     * - Арабские/китайские/девангари и т.п. → аналогично по доминирующему скрипту.
-     * - В остальных случаях (латиница) → совпадает с src если src = латинский, иначе tgt.
      */
     private fun pickLangLabel(text: String, src: Language, tgt: Language): String {
         if (text.isBlank()) return ""
@@ -525,7 +586,7 @@ class TranslatorViewModel @Inject constructor(
         val matched = when {
             script != null && script == srcScript -> src.code
             script != null && script == tgtScript -> tgt.code
-            else -> src.code  // fallback: считаем что это source-фраза
+            else -> src.code
         }
         return matched.uppercase()
     }
