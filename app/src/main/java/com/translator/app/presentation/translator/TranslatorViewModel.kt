@@ -411,6 +411,7 @@ class TranslatorViewModel @Inject constructor(
                     }
                     is GeminiEvent.InputTranscript -> {
                         // Лог
+                        logger.i("📝 IN : ${event.text}")
                         logger.i("📝 INPUT  TRANSCRIPT: ${event.text}")
                         val entry = TranscriptEntry(
                             direction = TranscriptDirection.INPUT,
@@ -431,6 +432,7 @@ class TranslatorViewModel @Inject constructor(
 
                     is GeminiEvent.OutputTranscript -> {
                         // Лог
+                        logger.i("📝 OUT: ${event.text}")
                         logger.i("📝 OUTPUT TRANSCRIPT: ${event.text}")
                         val entry = TranscriptEntry(
                             direction = TranscriptDirection.OUTPUT,
