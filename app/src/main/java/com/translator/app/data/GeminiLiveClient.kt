@@ -303,10 +303,10 @@ class GeminiLiveClient(
                         put("endOfSpeechSensitivity", config.vadEndSensitivity)
                         put("prefixPaddingMs", config.vadPrefixPaddingMs)
                         put("silenceDurationMs", config.vadSilenceDurationMs)
-                        put("turnCoverage", config.turnCoverage)
                     }
                 })
                 put("activityHandling", config.activityHandling)
+                put("turnCoverage", config.turnCoverage)
             })
 
             // ─── Транскрипция ───
