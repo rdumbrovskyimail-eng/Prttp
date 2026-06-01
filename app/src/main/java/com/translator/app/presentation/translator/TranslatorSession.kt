@@ -130,7 +130,11 @@ YOU MUST FOLLOW THESE RULES UNMISTAKABLY. NO EXCEPTIONS.
         // Thinking: Low — не Off (модель работает без thinking, отсюда обрывы)
         // и не Minimal (не успевает додумать длинные фразы). Low — оптимум
         // для перевода: маленький overhead + полная фраза целиком.
-        val translatorLatencyProfile = LatencyProfile.Low
+        val translatorLatencyProfile = try {
+            LatencyProfile.valueOf(settings.latencyProfile)
+        } catch (e: IllegalArgumentException) {
+            LatencyProfile.Low
+        }
 
         // Temperature: 0.2 для детерминированного перевода. Высокая temperature
         // даёт креативные перефразирования, что для перевода категорически

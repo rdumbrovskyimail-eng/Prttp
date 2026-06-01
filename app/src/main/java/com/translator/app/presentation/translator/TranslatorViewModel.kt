@@ -97,7 +97,7 @@ class TranslatorViewModel @Inject constructor(
 
     private val lastAiAudioChunkAtMs = AtomicLong(0L)
     private val hasModelOutputThisTurn = AtomicBoolean(false)
-    private val lastSeenTurnId = AtomicLong(-1L)
+    private val lastSeenTurnId = AtomicLong(Long.MIN_VALUE)
 
     @Volatile private var cachedSettings: AppSettings = AppSettings()
     @Volatile private var activeApiKey: String = ""
@@ -210,7 +210,7 @@ class TranslatorViewModel @Inject constructor(
         // 5) Сбрасываем per-turn флаги.
         hasModelOutputThisTurn.set(false)
         lastAiAudioChunkAtMs.set(0L)
-        lastSeenTurnId.set(-1L)
+        lastSeenTurnId.set(Long.MIN_VALUE)
         currentOpenPairId = null
         nextPairId = 1L
 
@@ -338,7 +338,7 @@ class TranslatorViewModel @Inject constructor(
 
             hasModelOutputThisTurn.set(false)
             lastAiAudioChunkAtMs.set(0L)
-            lastSeenTurnId.set(-1L)
+            lastSeenTurnId.set(Long.MIN_VALUE)
             currentOpenPairId = null
 
             _state.update {
@@ -401,7 +401,9 @@ class TranslatorViewModel @Inject constructor(
                     is GeminiEvent.AudioChunk -> {
                         // Отсекаем stale-чанки старых ходов.
                         if (event.turnId < lastSeenTurnId.get()) return@collect
-                        lastSeenTurnId.set(event.turnId)
+                        if (event.turnId > lastSeenTurnId.get()) {
+                            lastSeenTurnId.set(event.turnId)
+                        }
 
                         lastAiAudioChunkAtMs.set(System.currentTimeMillis())
                         hasModelOutputThisTurn.set(true)
@@ -456,7 +458,7 @@ class TranslatorViewModel @Inject constructor(
                         runCatching { audioEngine.flushPlayback() }
                         _state.update { it.copy(isAiSpeaking = false) }
                         hasModelOutputThisTurn.set(false)
-                        lastSeenTurnId.set(-1L)
+                        lastSeenTurnId.set(Long.MIN_VALUE)
                         stuckTurnWatchdogJob?.cancel()
                         finalizeOpenPair()
                     }
@@ -464,7 +466,7 @@ class TranslatorViewModel @Inject constructor(
                         audioEngine.onTurnComplete()
                         _state.update { it.copy(isAiSpeaking = false) }
                         hasModelOutputThisTurn.set(false)
-                        lastSeenTurnId.set(-1L)
+                        lastSeenTurnId.set(Long.MIN_VALUE)
                         stuckTurnWatchdogJob?.cancel()
                         finalizeOpenPair()
                     }

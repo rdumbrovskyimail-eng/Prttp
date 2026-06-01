@@ -285,8 +285,7 @@ class AndroidAudioEngine(
                             }
 
                             val chunk = MicAudioChunk(outBytes, outPos, pool)
-                            val result = _micChannel.trySend(chunk)
-                            if (result.isFailure) chunk.release()
+                            _micChannel.trySend(chunk)
                         }
                         read == 0 -> yield()
                         else -> { logger.d("AudioRecord.read=$read — exiting"); break }

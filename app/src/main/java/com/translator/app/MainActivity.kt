@@ -27,8 +27,8 @@ class MainActivity : ComponentActivity() {
     ) { /* no-op, лучше иметь нотификацию, но без неё работаем */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(

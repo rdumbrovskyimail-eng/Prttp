@@ -133,7 +133,7 @@ class GeminiLiveClient(
                     reconnectAttempts = 0
                     _events.tryEmit(GeminiEvent.Connected)
                     sendSetup(config)
-                    startSetupWatchdog(config.setupTimeoutMs)
+                    startSetupWatchdog(15_000L)
                 }
 
                 override fun onMessage(ws: WebSocket, text: String) {
@@ -280,7 +280,7 @@ class GeminiLiveClient(
                 if (thinkingLevel != null) {
                     put("thinkingConfig", buildJsonObject {
                         put("thinkingLevel", thinkingLevel)
-                        if (config.thinkingIncludeThoughts) put("includeThoughts", true)
+                        put("includeThoughts", config.thinkingIncludeThoughts)
                     })
                 }
             })
@@ -295,7 +295,6 @@ class GeminiLiveClient(
             }
 
             // ─── realtimeInputConfig ───
-            // activityHandling + turnCoverage шлются ВСЕГДА (они не часть VAD).
             put("realtimeInputConfig", buildJsonObject {
                 put("automaticActivityDetection", buildJsonObject {
                     put("disabled", !config.autoActivityDetection)
@@ -304,10 +303,10 @@ class GeminiLiveClient(
                         put("endOfSpeechSensitivity", config.vadEndSensitivity)
                         put("prefixPaddingMs", config.vadPrefixPaddingMs)
                         put("silenceDurationMs", config.vadSilenceDurationMs)
+                        put("turnCoverage", config.turnCoverage)
                     }
                 })
                 put("activityHandling", config.activityHandling)
-                put("turnCoverage", config.turnCoverage)
             })
 
             // ─── Транскрипция ───
@@ -426,14 +425,12 @@ class GeminiLiveClient(
                 isReady = true
                 activeTurnId = currentTurnId.incrementAndGet()
                 _events.tryEmit(GeminiEvent.SetupComplete)
-                return
             }
 
             root["toolCallCancellation"]?.jsonObject?.let { cancellation ->
                 val ids = cancellation["ids"]?.jsonArray
                     ?.map { it.jsonPrimitive.content } ?: emptyList()
                 _events.tryEmit(GeminiEvent.ToolCallCancellation(ids))
-                return
             }
 
             root["toolCall"]?.jsonObject?.let { tc ->
@@ -448,7 +445,6 @@ class GeminiLiveClient(
                 if (calls.isNotEmpty()) {
                     _events.tryEmit(GeminiEvent.ToolCall(calls))
                 }
-                return
             }
 
             root["sessionResumptionUpdate"]?.jsonObject?.let { update ->
@@ -460,13 +456,11 @@ class GeminiLiveClient(
                     sessionHandle = newHandle
                     _events.tryEmit(GeminiEvent.SessionHandleUpdate(newHandle, resumable, lastConsumed))
                 }
-                return
             }
 
             root["goAway"]?.jsonObject?.let { goAway ->
                 val timeLeft = goAway["timeLeft"]?.jsonPrimitive?.content
                 _events.tryEmit(GeminiEvent.GoAway(timeLeft))
-                return
             }
 
             root["usageMetadata"]?.jsonObject?.let { usage ->
@@ -477,46 +471,46 @@ class GeminiLiveClient(
                 _events.tryEmit(GeminiEvent.UsageMetadata(prompt, resp, total))
             }
 
-            val sc = root["serverContent"]?.jsonObject ?: return
+            root["serverContent"]?.jsonObject?.let { sc ->
+                sc["inputTranscription"]?.jsonObject
+                    ?.get("text")?.jsonPrimitive?.content
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { _events.tryEmit(GeminiEvent.InputTranscript(it)) }
 
-            sc["inputTranscription"]?.jsonObject
-                ?.get("text")?.jsonPrimitive?.content
-                ?.takeIf { it.isNotBlank() }
-                ?.let { _events.tryEmit(GeminiEvent.InputTranscript(it)) }
+                sc["outputTranscription"]?.jsonObject
+                    ?.get("text")?.jsonPrimitive?.content
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { _events.tryEmit(GeminiEvent.OutputTranscript(it)) }
 
-            sc["outputTranscription"]?.jsonObject
-                ?.get("text")?.jsonPrimitive?.content
-                ?.takeIf { it.isNotBlank() }
-                ?.let { _events.tryEmit(GeminiEvent.OutputTranscript(it)) }
-
-            if (sc["interrupted"]?.jsonPrimitive?.booleanOrNull == true) {
-                // Новый turn-id — старые AudioChunk-сообщения, ещё летящие по сети, будут отброшены.
-                activeTurnId = currentTurnId.incrementAndGet()
-                _events.tryEmit(GeminiEvent.Interrupted)
-            }
-
-            if (sc["turnComplete"]?.jsonPrimitive?.booleanOrNull == true) {
-                activeTurnId = currentTurnId.incrementAndGet()
-                _events.tryEmit(GeminiEvent.TurnComplete)
-            }
-
-            if (sc["generationComplete"]?.jsonPrimitive?.booleanOrNull == true) {
-                _events.tryEmit(GeminiEvent.GenerationComplete)
-            }
-
-            val parts = sc["modelTurn"]?.jsonObject?.get("parts") as? JsonArray ?: return
-            val turnForThisFrame = activeTurnId
-            for (part in parts) {
-                val obj = part.jsonObject
-                obj["text"]?.jsonPrimitive?.content?.let {
-                    _events.tryEmit(GeminiEvent.ModelText(it))
+                if (sc["interrupted"]?.jsonPrimitive?.booleanOrNull == true) {
+                    activeTurnId = currentTurnId.incrementAndGet()
+                    _events.tryEmit(GeminiEvent.Interrupted)
                 }
-                obj["inlineData"]?.jsonObject?.let { inline ->
-                    val mime = inline["mimeType"]?.jsonPrimitive?.content.orEmpty()
-                    if (mime.startsWith("audio/pcm")) {
-                        inline["data"]?.jsonPrimitive?.content?.let { b64 ->
-                            val pcm = Base64.decode(b64, Base64.DEFAULT)
-                            _events.tryEmit(GeminiEvent.AudioChunk(pcm, turnForThisFrame))
+
+                if (sc["turnComplete"]?.jsonPrimitive?.booleanOrNull == true) {
+                    activeTurnId = currentTurnId.incrementAndGet()
+                    _events.tryEmit(GeminiEvent.TurnComplete)
+                }
+
+                if (sc["generationComplete"]?.jsonPrimitive?.booleanOrNull == true) {
+                    _events.tryEmit(GeminiEvent.GenerationComplete)
+                }
+
+                (sc["modelTurn"]?.jsonObject?.get("parts") as? JsonArray)?.let { parts ->
+                    val turnForThisFrame = activeTurnId
+                    for (part in parts) {
+                        val obj = part.jsonObject
+                        obj["text"]?.jsonPrimitive?.content?.let {
+                            _events.tryEmit(GeminiEvent.ModelText(it))
+                        }
+                        obj["inlineData"]?.jsonObject?.let { inline ->
+                            val mime = inline["mimeType"]?.jsonPrimitive?.content.orEmpty()
+                            if (mime.startsWith("audio/pcm")) {
+                                inline["data"]?.jsonPrimitive?.content?.let { b64 ->
+                                    val pcm = Base64.decode(b64, Base64.DEFAULT)
+                                    _events.tryEmit(GeminiEvent.AudioChunk(pcm, turnForThisFrame))
+                                }
+                            }
                         }
                     }
                 }

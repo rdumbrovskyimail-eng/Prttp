@@ -86,7 +86,13 @@ class GeminiLiveForegroundService : Service() {
                 startForeground(NOTIFICATION_ID, buildNotification())
             }
             true
-        } catch (e: Throwable) {
+        } catch (e: android.app.ForegroundServiceStartNotAllowedException) {
+            android.util.Log.e("FGS", "Foreground service not allowed: ${e.message}")
+            false
+        } catch (e: SecurityException) {
+            android.util.Log.e("FGS", "Security exception: ${e.message}")
+            false
+        } catch (e: Exception) {
             android.util.Log.e("FGS", "startForeground failed: ${e.javaClass.simpleName}: ${e.message}")
             false
         }
