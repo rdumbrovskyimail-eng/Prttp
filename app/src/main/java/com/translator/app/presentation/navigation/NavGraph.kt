@@ -7,7 +7,12 @@ import androidx.navigation.compose.rememberNavController
 import com.translator.app.presentation.debug.DebugLogsScreen
 import com.translator.app.presentation.onboarding.OnboardingScreen
 import com.translator.app.presentation.settings.SettingsScreen
+import com.translator.app.presentation.theme.ThemeViewModel
+import com.translator.app.presentation.translator.MinimalTranslateScreen
 import com.translator.app.presentation.translator.TranslateScreen
+import androidx.compose.runtime.getValue
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
 fun AppNavGraph() {
@@ -19,11 +24,21 @@ fun AppNavGraph() {
             })
         }
         composable("translator") {
-            TranslateScreen(
-                onNavigateToSettings = { navController.navigate("settings") },
-                onNavigateToLogs = { navController.navigate("logs") },
-                onBack = { navController.popBackStack() }
-            )
+            val themeVm: ThemeViewModel = hiltViewModel()
+            val layout by themeVm.layoutId.collectAsStateWithLifecycle()
+            if (layout == "MINIMAL") {
+                MinimalTranslateScreen(
+                    onNavigateToSettings = { navController.navigate("settings") },
+                    onNavigateToLogs = { navController.navigate("logs") },
+                    onBack = { navController.popBackStack() }
+                )
+            } else {
+                TranslateScreen(
+                    onNavigateToSettings = { navController.navigate("settings") },
+                    onNavigateToLogs = { navController.navigate("logs") },
+                    onBack = { navController.popBackStack() }
+                )
+            }
         }
         composable("settings") {
             SettingsScreen(
