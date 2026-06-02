@@ -22,4 +22,8 @@ class ThemeViewModel @Inject constructor(
     val revealId = settingsStore.data
         .map { MessageRevealId.fromName(it.messageRevealId) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, MessageRevealId.SOFT_FADE)
+
+    val layoutId = settingsStore.data
+        .map { it.translatorLayoutId }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "CLASSIC")
 }
