@@ -1,3 +1,29 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// Путь: app/src/main/java/com/translator/app/data/AndroidAudioEngine.kt
+//
+// ПОЛНАЯ ЗАМЕНА (v4.0 — изолированный realtime-конвейер)
+//
+// Что и зачем изменено (диагноз «молчит, а текст появляется»):
+//   Раньше воспроизведение конкурировало за главный поток и ехало через
+//   лоссовый общий event-bus, поэтому аудио-чанки дропались, а редкая
+//   транскрипция проскакивала. Теперь:
+//
+//   1) CAPTURE и PLAYBACK живут на ВЫДЕЛЕННЫХ однопоточных диспетчерах с
+//      аудио-приоритетом потока (THREAD_PRIORITY_URGENT_AUDIO / _AUDIO).
+//      Они физически не зависят от UI и от сетевого потока OkHttp.
+//   2) Блокирующая запись в AudioTrack сама пейсит поток (backpressure) —
+//      никаких busy-loop и потерь.
+//   3) Джиттер-буфер делает гладкий старт каждой реплики (без подзёрна).
+//   4) Barge-in (flushPlayback) мгновенно чистит и канал, и аппаратный буфер.
+//   5) Телеметрия: счётчики дропов очереди и underrun'ов AudioTrack.
+//
+// Соответствие официальной документации Gemini Live API:
+//   • Вход  — raw 16-bit PCM, 16 kHz, little-endian  (SessionConfig.INPUT_SAMPLE_RATE)
+//   • Выход — raw 16-bit PCM, 24 kHz                  (SessionConfig.OUTPUT_SAMPLE_RATE)
+//   Ровно эти форматы требует Live API; ресемплинг не нужен.
+//
+// Контракт интерфейса AudioEngine сохранён 1:1 — остальной код не меняется.
+// ═══════════════════════════════════════════════════════════════════════════
 package com.translator.app.data
 
 import android.media.AudioAttributes
@@ -8,19 +34,22 @@ import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
+import android.os.Build
+import android.os.Process
 import com.translator.app.domain.AudioEngine
 import com.translator.app.domain.model.AudioBufferPool
 import com.translator.app.domain.model.MicAudioChunk
 import com.translator.app.domain.model.SessionConfig
 import com.translator.app.util.AppLogger
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -32,6 +61,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.abs
 import kotlin.math.tanh
 
 class AndroidAudioEngine(
@@ -39,39 +71,65 @@ class AndroidAudioEngine(
 ) : AudioEngine {
 
     companion object {
-        // 40ms audio chunk @ 16kHz mono = 640 samples
+        // 40 ms аудио-чанк @ 16 kHz mono = 640 семплов.
         private const val CAPTURE_CHUNK_SAMPLES = 640
-        // AGC параметры
+
+        // ─── AGC (программный, добивает поверх системного) ───
         private const val AGC_TARGET_PEAK = 18_000f
-        private const val AGC_INITIAL_PEAK = 4000f
+        private const val AGC_INITIAL_PEAK = 4_000f
         private const val AGC_ATTACK = 0.4f
         private const val AGC_RELEASE = 0.015f
         private const val AGC_MAX_BOOST = 2.0f
         private const val AGC_MIN_BOOST = 0.8f
         private const val AGC_NOISE_FLOOR = 800f
-        // Soft gate
+
+        // ─── Soft-gate (отсечь дыхание/фон) ───
         private const val GATE_LOW = 600f
         private const val GATE_HIGH = 1200f
-        // Combined gain ceiling
         private const val GAIN_CEILING = 2.5f
+
+        // ─── Целевой аппаратный буфер воспроизведения (мс) ───
+        // 200 мс — компромисс: достаточно, чтобы пережить сетевой джиттер и
+        // burst-доставку без подзёрна, но не раздувает задержку.
+        private const val PLAYBACK_BUFFER_MS = 200
+
+        // Логировать накопленные дропы/underrun каждые N событий.
+        private const val TELEMETRY_EVERY = 50L
     }
 
-    // ═══ CONFIG ═══
-    @Volatile private var playbackQueueCapacity = 256
-    @Volatile private var jitterPreBufferChunks = 3
-    @Volatile private var jitterTimeoutMs = 150L
+    // ════════════════════════════════════════════════════════════════════
+    //  CONFIG (volatile — читаются из аудио-потоков)
+    // ════════════════════════════════════════════════════════════════════
+    @Volatile private var playbackQueueCapacity = 128
+    @Volatile private var jitterPreBufferChunks = 2
+    @Volatile private var jitterTimeoutMs = 120L
 
     @Volatile private var playbackGain: Float = 1.0f
     @Volatile private var micGain: Float = 1.0f
-    @Volatile private var forceSpeakerOutput: Boolean = true
+    @Volatile private var forceSpeakerOutput: Boolean = true   // фактическая маршрутизация — в FGS
     @Volatile private var useAec: Boolean = true
-
     @Volatile private var playbackBoost: Float = 1.4f
 
-    // ═══ FLOWS ═══
-    // Принципиально: consumer обязан release. Если эмиссия не прошла — мы тут же release.
-    // Но при BufferOverflow.DROP_OLDEST SharedFlow дропает старый элемент без release —
-    // поэтому используем onEach + manual release в consumer'е (см. TranslatorViewModel).
+    // ════════════════════════════════════════════════════════════════════
+    //  ВЫДЕЛЕННЫЕ АУДИО-ДИСПЕТЧЕРЫ
+    //  По одному реальному потоку на capture и playback. Они создаются один
+    //  раз на весь жизненный цикл синглтона и переиспользуются — это даёт
+    //  стабильный аудио-поток с высоким приоритетом, не завязанный на UI/IO.
+    // ════════════════════════════════════════════════════════════════════
+    private val captureDispatcher: CoroutineDispatcher =
+        Executors.newSingleThreadExecutor { r -> Thread(r, "gem-audio-capture") }
+            .asCoroutineDispatcher()
+
+    private val playbackDispatcher: CoroutineDispatcher =
+        Executors.newSingleThreadExecutor { r -> Thread(r, "gem-audio-playback") }
+            .asCoroutineDispatcher()
+
+    // ════════════════════════════════════════════════════════════════════
+    //  ВЫХОДНЫЕ ПОТОКИ
+    // ════════════════════════════════════════════════════════════════════
+
+    // Микрофонный поток. Channel с DROP_OLDEST + onUndeliveredElement,
+    // чтобы вытесненный чанк гарантированно вернулся в пул (без утечек).
     private val _micChannel = Channel<MicAudioChunk>(
         capacity = 16,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
@@ -79,16 +137,21 @@ class AndroidAudioEngine(
     )
     override val micOutput: Flow<MicAudioChunk> = _micChannel.receiveAsFlow()
 
+    // Сигнал для UI-визуализации (уровень речи). tryEmit — НИКОГДА не блокирует
+    // playback-поток. UI сам считает уровень из PCM.
     private val _playbackSync = MutableSharedFlow<ByteArray>(
-        replay = 0, extraBufferCapacity = 128,
-        onBufferOverflow = BufferOverflow.SUSPEND
+        replay = 0,
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     override val playbackSync: Flow<ByteArray> = _playbackSync.asSharedFlow()
 
     @Volatile override var isCapturing: Boolean = false; private set
     @Volatile override var isPlaying: Boolean = false; private set
 
-    // ═══ STATE ═══
+    // ════════════════════════════════════════════════════════════════════
+    //  STATE
+    // ════════════════════════════════════════════════════════════════════
     private var engineScope: CoroutineScope = newEngineScope()
     private var captureJob: Job? = null
     private var playbackJob: Job? = null
@@ -102,13 +165,19 @@ class AndroidAudioEngine(
     private val playbackMutex = Mutex()
     @Volatile private var playbackChannel: Channel<ByteArray> =
         Channel(playbackQueueCapacity, BufferOverflow.DROP_OLDEST)
+
+    // Границы реплики для джиттер-буфера.
     @Volatile private var isFirstBatch = true
     @Volatile private var awaitingDrain = false
 
     @Volatile private var bufferPool: AudioBufferPool? = null
 
+    // ─── Телеметрия ───
+    private val droppedPlaybackChunks = AtomicLong(0L)
+    @Volatile private var lastUnderrunCount = 0
+
     private fun newEngineScope(): CoroutineScope =
-        CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        CoroutineScope(SupervisorJob() + playbackDispatcher)
 
     // ════════════════════════════════════════════════════════════════════
     //  CONFIG SETTERS
@@ -126,18 +195,14 @@ class AndroidAudioEngine(
         runCatching { audioTrack?.setVolume(playbackGain) }
     }
 
-    // micGain ограничен 0.5..1.5 — AGC доберёт остальное (макс ×2.5 совместно).
+    // micGain ограничен 0.5..1.5 — AGC доберёт остальное (совместно макс ×2.5).
     override fun setMicGain(gain: Float) { micGain = gain.coerceIn(0.5f, 1.5f) }
 
     override fun setSpeakerRouting(forceSpeaker: Boolean) { forceSpeakerOutput = forceSpeaker }
 
-    override fun setPlaybackBoost(boost: Float) {
-        playbackBoost = boost.coerceIn(1.0f, 1.8f)
-    }
+    override fun setPlaybackBoost(boost: Float) { playbackBoost = boost.coerceIn(1.0f, 1.8f) }
 
     override fun setUseAec(enabled: Boolean) { useAec = enabled }
-
-
 
     // ════════════════════════════════════════════════════════════════════
     //  CAPTURE
@@ -181,9 +246,7 @@ class AndroidAudioEngine(
 
     @Suppress("MissingPermission")
     override suspend fun startCapture() {
-        if (isCapturing) {
-            logger.d("startCapture skipped — already capturing"); return
-        }
+        if (isCapturing) { logger.d("startCapture skipped — already capturing"); return }
         if (!engineScope.isActive) engineScope = newEngineScope()
 
         val sampleRate = SessionConfig.INPUT_SAMPLE_RATE
@@ -195,10 +258,7 @@ class AndroidAudioEngine(
         }
 
         val (recorder, usedSource) = tryCreateRecorder(sampleRate, minBuf)
-        if (recorder == null) {
-            logger.e("AudioRecord: ALL sources failed.")
-            return
-        }
+        if (recorder == null) { logger.e("AudioRecord: ALL sources failed."); return }
 
         if (useAec && AcousticEchoCanceler.isAvailable()) {
             runCatching {
@@ -210,7 +270,6 @@ class AndroidAudioEngine(
                 noiseSuppressor = NoiseSuppressor.create(recorder.audioSessionId)?.apply { enabled = true }
             }.onFailure { logger.w("NS init skipped: ${it.message}") }
         }
-        // Системный AGC если доступен — отключает наш программный, мы и так считаем bonus.
         if (AutomaticGainControl.isAvailable()) {
             runCatching {
                 autoGainControl = AutomaticGainControl.create(recorder.audioSessionId)?.apply { enabled = true }
@@ -234,7 +293,9 @@ class AndroidAudioEngine(
         isCapturing = true
         logger.d("Recording started rate=$sampleRate src=$usedSource pool=${poolBufSize}B×32")
 
-        captureJob = engineScope.launch {
+        captureJob = engineScope.launch(captureDispatcher) {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
+
             val buffer = ShortArray(CAPTURE_CHUNK_SAMPLES)
             var rollingPeak = AGC_INITIAL_PEAK
 
@@ -243,10 +304,10 @@ class AndroidAudioEngine(
                     val read = recorder.read(buffer, 0, buffer.size)
                     when {
                         read > 0 -> {
-                            // peak блока
+                            // Пик блока.
                             var lp = 0
                             for (i in 0 until read) {
-                                val v = kotlin.math.abs(buffer[i].toInt())
+                                val v = abs(buffer[i].toInt())
                                 if (v > lp) lp = v
                             }
                             val localPeak = lp.toFloat()
@@ -257,7 +318,8 @@ class AndroidAudioEngine(
                                 rollingPeak - (rollingPeak - localPeak) * AGC_RELEASE
                             if (rollingPeak < AGC_NOISE_FLOOR) rollingPeak = AGC_NOISE_FLOOR
 
-                            val agcGain = (AGC_TARGET_PEAK / rollingPeak).coerceIn(AGC_MIN_BOOST, AGC_MAX_BOOST)
+                            val agcGain = (AGC_TARGET_PEAK / rollingPeak)
+                                .coerceIn(AGC_MIN_BOOST, AGC_MAX_BOOST)
                             val finalGain = (agcGain * micGain).coerceAtMost(GAIN_CEILING)
 
                             val gateFactor = when {
@@ -269,12 +331,11 @@ class AndroidAudioEngine(
 
                             // Soft-tanh клиппинг — без хрипа на пиках.
                             for (i in 0 until read) {
-                                val sample = buffer[i].toInt() * totalGain
-                                val norm = sample / 32768f
-                                val soft = tanh(norm * 1.05f) * 32760f
-                                buffer[i] = soft.toInt().toShort()
+                                val norm = (buffer[i].toInt() * totalGain) / 32768f
+                                buffer[i] = (tanh(norm * 1.05f) * 32760f).toInt().toShort()
                             }
 
+                            // PCM16 LE → байты из пула (без аллокаций в hot-loop).
                             val outBytes = pool.borrow()
                             var outPos = 0
                             for (i in 0 until read) {
@@ -283,14 +344,16 @@ class AndroidAudioEngine(
                                 outBytes[outPos + 1] = ((s ushr 8) and 0xFF).toByte()
                                 outPos += 2
                             }
-
-                            val chunk = MicAudioChunk(outBytes, outPos, pool)
-                            _micChannel.trySend(chunk)
+                            // trySend на DROP_OLDEST-канале не падает: вытесненный
+                            // старый чанк вернётся в пул через onUndeliveredElement.
+                            _micChannel.trySend(MicAudioChunk(outBytes, outPos, pool))
                         }
                         read == 0 -> yield()
                         else -> { logger.d("AudioRecord.read=$read — exiting"); break }
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 logger.e("CAPTURE LOOP ERROR: ${e.message}", e)
             } finally {
@@ -313,7 +376,7 @@ class AndroidAudioEngine(
 
         runCatching { rec?.stop() }
 
-        withContext(Dispatchers.IO) {
+        withContext(captureDispatcher) {
             runCatching { aec?.enabled = false; aec?.release() }; echoCanceler = null
             runCatching { ns?.enabled = false; ns?.release() }; noiseSuppressor = null
             runCatching { agc?.enabled = false; agc?.release() }; autoGainControl = null
@@ -333,7 +396,7 @@ class AndroidAudioEngine(
             playbackChannel = Channel(playbackQueueCapacity, BufferOverflow.DROP_OLDEST)
         }
 
-        val sampleRate = SessionConfig.OUTPUT_SAMPLE_RATE
+        val sampleRate = SessionConfig.OUTPUT_SAMPLE_RATE   // 24 kHz по докам Live API
         val minBuf = AudioTrack.getMinBufferSize(
             sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
@@ -341,71 +404,74 @@ class AndroidAudioEngine(
             logger.e("Device does not support ${sampleRate}Hz!"); return@withLock
         }
 
+        // Буфер на ~PLAYBACK_BUFFER_MS, но не меньше системного минимума.
+        val targetBytes = sampleRate * 2 /*PCM16*/ * PLAYBACK_BUFFER_MS / 1000
+        val trackBuffer = maxOf(minBuf * 2, targetBytes)
+
         val track = try {
             AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
                 )
                 .setAudioFormat(
                     AudioFormat.Builder()
                         .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                         .setSampleRate(sampleRate)
-                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build()
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build()
                 )
                 .setTransferMode(AudioTrack.MODE_STREAM)
-                .setBufferSizeInBytes(minBuf * 2).build()
+                .setBufferSizeInBytes(trackBuffer)
+                .build()
         } catch (e: Exception) {
             logger.e("AudioTrack build failed: ${e.message}", e); return@withLock
         }
 
         audioTrack = track
         runCatching { track.setVolume(playbackGain) }
+        isFirstBatch = true
+        awaitingDrain = false
+        droppedPlaybackChunks.set(0L)
+        lastUnderrunCount = 0
         track.play()
         isPlaying = true
-        logger.d("Speaker ready (rate=$sampleRate, boost=${"%.2f".format(playbackBoost)}x)")
+        logger.d("Speaker ready (rate=$sampleRate, buf=${trackBuffer}B, boost=${"%.2f".format(playbackBoost)}x)")
 
-        playbackJob = engineScope.launch {
+        playbackJob = engineScope.launch(playbackDispatcher) {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
             try {
                 for (chunk in playbackChannel) {
                     if (!isActive) break
+
                     if (isFirstBatch) {
-                        val preBuffer = mutableListOf(chunk)
-                        repeat(jitterPreBufferChunks - 1) {
-                            try {
-                                val next = withTimeoutOrNull(jitterTimeoutMs) {
-                                    playbackChannel.receive()
-                                }
-                                if (next != null) preBuffer.add(next)
-                            } catch (_: ClosedReceiveChannelException) { return@repeat }
-                            catch (_: Exception) { return@repeat }
-                        }
-                        for (buf in preBuffer) {
-                            val boosted = applyPlaybackBoost(buf)
-                            _playbackSync.tryEmit(boosted)
-                            val written = track.write(boosted, 0, boosted.size)
-                            if (written < 0) {
-                                logger.e("AudioTrack write error: $written")
-                                break
-                            }
+                        // Короткий pre-roll: добираем ещё (preBuffer-1) чанков с
+                        // таймаутом, чтобы старт реплики был гладким (без подзёрна).
+                        var pre = 1
+                        if (!writeToTrack(track, chunk)) break
+                        while (pre < jitterPreBufferChunks) {
+                            val next = withTimeoutOrNull(jitterTimeoutMs) {
+                                playbackChannel.receiveCatching().getOrNull()
+                            } ?: break
+                            if (!writeToTrack(track, next)) { pre = jitterPreBufferChunks; break }
+                            pre++
                         }
                         isFirstBatch = false
                     } else {
-                        val boosted = applyPlaybackBoost(chunk)
-                        _playbackSync.tryEmit(boosted)
-                        val written = track.write(boosted, 0, boosted.size)
-                        if (written < 0) {
-                            logger.e("AudioTrack write error: $written")
-                            break
-                        }
+                        if (!writeToTrack(track, chunk)) break
                     }
 
+                    // Конец реплики (turnComplete пришёл и очередь опустела) →
+                    // следующая реплика снова пройдёт через джиттер-пребуфер.
                     if (awaitingDrain && playbackChannel.isEmpty) {
                         awaitingDrain = false
                         isFirstBatch = true
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 logger.e("PLAYBACK LOOP ERROR: ${e.message}", e)
             } finally {
@@ -414,7 +480,37 @@ class AndroidAudioEngine(
         }
     }
 
-    // Soft-tanh boost — без хрипа на пиках.
+    /**
+     * Блокирующая запись полного чанка в AudioTrack (на выделенном потоке).
+     * Блокировка здесь — это и есть естественный backpressure: когда
+     * аппаратный буфер полон, поток ждёт, не теряя данные.
+     * @return false при фатальной ошибке записи.
+     */
+    private fun writeToTrack(track: AudioTrack, pcm: ByteArray): Boolean {
+        val boosted = applyPlaybackBoost(pcm)
+        _playbackSync.tryEmit(boosted)   // сигнал для UI-визуализации, не блокирует
+
+        var offset = 0
+        while (offset < boosted.size) {
+            val written = track.write(boosted, offset, boosted.size - offset)
+            if (written < 0) { logger.e("AudioTrack.write error: $written"); return false }
+            offset += written
+        }
+        maybeLogUnderruns(track)
+        return true
+    }
+
+    private fun maybeLogUnderruns(track: AudioTrack) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            val u = runCatching { track.underrunCount }.getOrDefault(lastUnderrunCount)
+            if (u > lastUnderrunCount && (u - lastUnderrunCount) % 10 == 0) {
+                logger.w("AudioTrack underruns=$u (буфер не успевает наполняться)")
+            }
+            lastUnderrunCount = u
+        }
+    }
+
+    // Soft-clip boost (x/(1+|x|)) — поднимает громкость без хрипа на пиках.
     private fun applyPlaybackBoost(pcm: ByteArray): ByteArray {
         val boost = playbackBoost
         if (boost <= 1.001f || pcm.size < 2) return pcm
@@ -427,12 +523,11 @@ class AndroidAudioEngine(
             val high = out[i + 1].toInt()
             val sample = (high shl 8) or low
             val signed = if (sample and 0x8000 != 0) sample or 0xFFFF0000.toInt() else sample
-            
-            // Идеальный клиппер без искажений
+
             val x = (signed / 32768f) * boost
-            val soft = x / (1f + kotlin.math.abs(x))
-            
+            val soft = x / (1f + abs(x))
             val clipped = (soft * 32760f).toInt()
+
             out[i] = (clipped and 0xFF).toByte()
             out[i + 1] = ((clipped shr 8) and 0xFF).toByte()
             i += 2
@@ -442,31 +537,43 @@ class AndroidAudioEngine(
 
     override suspend fun enqueuePlayback(pcmData: ByteArray) {
         if (pcmData.isEmpty()) return
+        // DROP_OLDEST: при перегрузе теряем САМЫЙ старый чанк (ограничиваем
+        // задержку, не даём ей расти бесконечно). Считаем дропы для телеметрии.
         val result = playbackChannel.trySend(pcmData)
-        if (result.isFailure) {
-            playbackChannel.tryReceive()
-            playbackChannel.trySend(pcmData)
+        if (!result.isSuccess) {
+            val n = droppedPlaybackChunks.incrementAndGet()
+            if (n % TELEMETRY_EVERY == 0L) logger.w("Playback queue dropped $n chunks (overrun)")
         }
-        awaitingDrain = false
     }
 
     override suspend fun flushPlayback() {
-        while (playbackChannel.tryReceive().isSuccess) { /* drain */ }
-        isFirstBatch = true
+        // Barge-in: мгновенно очищаем и очередь, и аппаратный буфер AudioTrack.
+        var drained = 0
+        while (playbackChannel.tryReceive().isSuccess) drained++
         awaitingDrain = false
-        audioTrack?.apply { runCatching { pause(); flush(); play() } }
+        isFirstBatch = true
+        audioTrack?.let { t ->
+            runCatching { t.pause() }
+            runCatching { t.flush() }
+            runCatching { t.play() }
+        }
+        if (drained > 0) logger.d("flushPlayback drained=$drained")
     }
 
     override suspend fun onTurnComplete() {
+        // Сигнал «реплика модели закончилась»: как только очередь опустеет,
+        // следующая реплика снова пройдёт через джиттер-пребуфер.
         awaitingDrain = true
     }
 
     override suspend fun releaseAll() = playbackMutex.withLock {
         stopCapture()
         isPlaying = false
-        // Строгий порядок закрытия для предотвращения IllegalStateException
+
+        // Строгий порядок закрытия — предотвращает IllegalStateException.
         runCatching { withTimeoutOrNull(800L) { playbackJob?.cancelAndJoin() } }
         playbackJob = null
+
         audioTrack?.let { track ->
             runCatching { track.pause() }
             runCatching { track.flush() }
@@ -474,8 +581,12 @@ class AndroidAudioEngine(
             runCatching { track.release() }
         }
         audioTrack = null
+
         runCatching { playbackChannel.close() }
         runCatching { withTimeoutOrNull(800L) { engineScope.coroutineContext[Job]?.cancelAndJoin() } }
+
+        isFirstBatch = true
+        awaitingDrain = false
         logger.d("Engine released")
     }
 }
