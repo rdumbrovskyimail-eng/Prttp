@@ -74,6 +74,7 @@ data class AppSettings(
     // Дефолтная тема — GEM.
     val themeId: String = "GEM",
     val messageRevealId: String = "SOFT_FADE",
+    val translatorLayoutId: String = "CLASSIC",   // "CLASSIC" | "MINIMAL"
 
     // ═══════════════════ 10. DEBUG ═══════════════════
     val showDebugLog: Boolean = false,
