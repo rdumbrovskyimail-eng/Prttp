@@ -17,6 +17,7 @@ package com.translator.app.presentation.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -204,6 +205,26 @@ fun SettingsScreen(
                 selected = MessageRevealId.fromName(s.messageRevealId),
                 onSelect = { id -> viewModel.update { copy(messageRevealId = id.name) } }
             )
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Минималистичный экран", fontWeight = FontWeight.W600)
+                    Text(
+                        "Белый экран · крупные карточки",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = s.translatorLayoutId == "MINIMAL",
+                    onCheckedChange = { on ->
+                        viewModel.update { copy(translatorLayoutId = if (on) "MINIMAL" else "CLASSIC") }
+                    }
+                )
+            }
 
             Spacer(Modifier.height(8.dp))
 
