@@ -1,8 +1,43 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// Путь: app/src/main/java/com/translator/app/data/GeminiLiveClient.kt
+//
+// ПОЛНАЯ ЗАМЕНА (v4.0 — разбор кадров вне сетевого потока)
+//
+// Что и зачем изменено:
+//
+//   1) РАЗБОР КАДРОВ ВЫНЕСЕН С СЕТЕВОГО ПОТОКА OkHttp.
+//      Раньше json.parse(...) + Base64.decode(...) тяжёлых аудио-кадров
+//      выполнялись прямо в WebSocketListener.onMessage (поток-читатель
+//      OkHttp). На больших inlineData это держало поток-читатель занятым →
+//      кадры накапливались → задержки и потери. Теперь onMessage лишь кладёт
+//      сырой кадр в Channel и мгновенно возвращается, а отдельная корутина
+//      на Dispatchers.Default разбирает кадры последовательно. Управляющие
+//      кадры (setupComplete/turnComplete/...) НИКОГДА не теряются (UNLIMITED).
+//
+//   2) ФИКС ПОРЯДКА turnId.
+//      Раньше turnComplete инкрементировал activeTurnId ДО чтения modelTurn
+//      в том же кадре, поэтому «хвостовое» аудио помечалось уже СЛЕДУЮЩИМ
+//      ходом. Теперь аудио тегируется текущим activeTurnId ПЕРЕД обработкой
+//      границ хода (interrupted/turnComplete).
+//
+//   3) MULTI-PART СОБЫТИЯ 3.1.
+//      Согласно докам, одно серверное событие может содержать сразу несколько
+//      частей (inlineData + transcript). Разбор обрабатывает ВСЕ части кадра.
+//
+// Соответствие докам Gemini Live API (v1beta BidiGenerateContent):
+//   • setup.model = "models/{model}"
+//   • realtimeInput.audio (PCM16 16 kHz) для входа, realtimeInput.text для текста
+//   • automaticActivityDetection / activityHandling / turnCoverage — VAD
+//   • sessionResumption.handle, contextWindowCompression.slidingWindow
+//
+// Интерфейс LiveClient сохранён 1:1.
+// ═══════════════════════════════════════════════════════════════════════════
 package com.translator.app.data
 
 import android.util.Base64
 import com.translator.app.domain.LiveClient
 import com.translator.app.domain.ToolResponse
+import com.translator.app.domain.model.FunctionCall
 import com.translator.app.domain.model.GeminiEvent
 import com.translator.app.domain.model.MicAudioChunk
 import com.translator.app.domain.model.SessionConfig
@@ -13,6 +48,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -48,7 +84,8 @@ class GeminiLiveClient(
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
-    // Стабильнее на мобильной сети, чем 60s.
+    // readTimeout=0: серверные кадры приходят асинхронно, тайм-аута чтения нет.
+    // pingInterval=20s: стабильнее на мобильной сети, чем дефолтные 60s.
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .pingInterval(20, TimeUnit.SECONDS)
@@ -69,24 +106,41 @@ class GeminiLiveClient(
     @Volatile override var isReady: Boolean = false
         private set
 
-    // Защита коннекта (ровно с новой строки)
-    private val connectionMutex = kotlinx.coroutines.sync.Mutex()
+    private val connectionMutex = Mutex()
 
     @Volatile private var logRawFrames: Boolean = false
     @Volatile private var droppedAudioChunks: Long = 0L
 
-    // Turn-ID — каждый InputTranscript/новая речь начинает новый ход.
-    // AudioChunk'и из старых ходов после Interrupted просто игнорируются клиентом.
+    // Turn-ID: каждая граница хода (setupComplete / interrupted / turnComplete)
+    // начинает новый ход. Стейл-аудио старых ходов отсекается на стороне VM.
     private val currentTurnId = AtomicLong(0L)
     @Volatile private var activeTurnId: Long = 0L
 
     private var currentConfig: SessionConfig? = null
-    private var reconnectAttempts: Int = 0
+    @Volatile private var reconnectAttempts: Int = 0
 
     @Volatile private var closeCompletion: CompletableDeferred<Unit>? = null
     @Volatile private var setupWatchdog: Job? = null
 
+    // Кольцо последних отправленных кадров — для диагностики 1007/1008.
     private val lastSentFrames = java.util.ArrayDeque<String>(3)
+
+    // ════════════════════════════════════════════════════════════════════
+    //  RX-PIPELINE: разбор кадров ВНЕ потока-читателя OkHttp
+    //  onMessage кладёт сырой кадр сюда и сразу возвращается; парсер-корутина
+    //  разбирает кадры на Dispatchers.Default. UNLIMITED — чтобы НИ ОДИН
+    //  управляющий кадр не потерялся.
+    // ════════════════════════════════════════════════════════════════════
+    private val frameChannel = Channel<String>(Channel.UNLIMITED)
+
+    init {
+        internalScope.launch(Dispatchers.Default) {
+            for (raw in frameChannel) {
+                runCatching { parseServerMessage(raw) }
+                    .onFailure { logger.e("PARSE ERROR: ${it.message}", it) }
+            }
+        }
+    }
 
     private fun trackSentFrame(raw: String) {
         synchronized(lastSentFrames) {
@@ -95,22 +149,17 @@ class GeminiLiveClient(
         }
     }
 
-    // ════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════════
     //  CONNECT / DISCONNECT
-    // ════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════════
 
     override suspend fun connect(apiKey: String, config: SessionConfig, logRaw: Boolean) {
         connectionMutex.withLock {
             if (webSocket != null) internalDisconnect()
 
-            // Если caller явно не передал handle (config.sessionHandle == null),
-            // дополнительно подстраховываемся: обнуляем наш кэшированный handle,
-            // чтобы исключить любую возможность непроизвольного resume в случае,
-            // если parseServerMessage уже успел установить новый handle между
-            // disconnect и connect.
-            if (config.sessionHandle == null) {
-                sessionHandle = null
-            }
+            // Если caller явно не передал handle — обнуляем кэш, чтобы исключить
+            // непроизвольный resume (например, при смене языковой пары).
+            if (config.sessionHandle == null) sessionHandle = null
 
             currentConfig = config
             logRawFrames = logRaw
@@ -136,17 +185,18 @@ class GeminiLiveClient(
                     startSetupWatchdog(15_000L)
                 }
 
+                // Текстовый кадр → в очередь разбора (НЕ парсим в этом потоке).
                 override fun onMessage(ws: WebSocket, text: String) {
                     if (logRawFrames) {
                         val preview = if (text.length > 500) text.take(500) + "…" else text
                         logger.d("RAW ← $preview")
                     }
-                    parseServerMessage(text)
+                    frameChannel.trySend(text)
                 }
 
+                // Бинарный кадр → utf8 → в очередь разбора.
                 override fun onMessage(ws: WebSocket, bytes: ByteString) {
-                    try { parseServerMessage(bytes.utf8()) }
-                    catch (e: Exception) { logger.e("Binary frame decode: ${e.message}") }
+                    frameChannel.trySend(bytes.utf8())
                 }
 
                 override fun onClosed(ws: WebSocket, code: Int, reason: String) {
@@ -204,49 +254,35 @@ class GeminiLiveClient(
         webSocket = null
         isReady = false
         closeCompletion = null
-        // Любые stale-chunki после disconnect игнорируются.
+        // Любые stale-chunki после disconnect игнорируются (новый ход).
         activeTurnId = currentTurnId.incrementAndGet()
     }
 
     override suspend fun disconnect() {
-        connectionMutex.withLock {
-            internalDisconnect()
-        }
+        connectionMutex.withLock { internalDisconnect() }
     }
 
     /**
-     * Сбрасывает локально хранимый sessionHandle, чтобы СЛЕДУЮЩИЙ connect()
-     * стартовал свежую сессию вместо restore из server-side кеша.
-     *
-     * Согласно официальной документации Gemini Live API, серверного API для
-     * "удаления" сессии нет — старый handle просто протухает (resumption
-     * tokens живут 2 часа после последнего termination, сами сессии — 24 часа).
-     * Поэтому единственное, что мы можем и должны сделать на клиенте — это
-     * НЕ передавать handle при следующем setup-сообщении, и сервер начнёт
-     * полностью новый контекст с новым system instruction.
-     *
-     * НЕ блокирующий, НЕ суспендирующий — безопасно вызывать с любого потока.
+     * Сбрасывает локальный sessionHandle, чтобы СЛЕДУЮЩИЙ connect() начал свежую
+     * сессию вместо resume из server-side кеша. Серверного API «удаления» сессии
+     * у Gemini Live нет — handle просто протухает (resumption ~2 ч, сессия ~24 ч).
+     * НЕ блокирующий, безопасно вызывать с любого потока.
      */
     override fun resetSession() {
         val had = sessionHandle != null
         sessionHandle = null
-        // На случай, если в текущем currentConfig висит старый handle —
-        // обнуляем и его, чтобы автореконнект из observer'а тоже стартовал fresh.
         currentConfig?.let { cfg ->
-            if (cfg.sessionHandle != null) {
-                currentConfig = cfg.copy(sessionHandle = null)
-            }
+            if (cfg.sessionHandle != null) currentConfig = cfg.copy(sessionHandle = null)
         }
         if (had) logger.d("🧹 Session handle cleared — next connect() will start fresh")
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  SETUP
-    // ════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════════
+    //  SETUP (doc-compliant BidiGenerateContentSetup)
+    // ════════════════════════════════════════════════════════════════════
 
     private fun sendSetup(config: SessionConfig) {
-        val msg = buildFullSetup(config)
-        val raw = msg.toString()
+        val raw = buildFullSetup(config).toString()
         logger.d("SETUP → ${config.model} (${raw.length} chars)")
         if (logRawFrames) raw.chunked(500).forEachIndexed { i, c -> logger.d("[setup $i] $c") }
         trackSentFrame(raw)
@@ -255,13 +291,11 @@ class GeminiLiveClient(
 
     private fun buildFullSetup(config: SessionConfig): JsonObject = buildJsonObject {
         put("setup", buildJsonObject {
-            // proto BidiGenerateContentSetup: Required format is "models/{model}".
+            // proto требует "models/{model}".
             put("model", if (config.model.startsWith("models/")) config.model else "models/${config.model}")
 
-            // ─── generationConfig ───
             put("generationConfig", buildJsonObject {
                 put("responseModalities", buildJsonArray { add(JsonPrimitive(config.responseModality)) })
-
                 put("temperature", config.temperature)
                 put("topP", config.topP)
                 put("maxOutputTokens", config.maxOutputTokens)
@@ -276,6 +310,8 @@ class GeminiLiveClient(
                     })
                 }
 
+                // thinkingLevel для 3.1: minimal/low/medium/high (по докам).
+                // Для переводчика рекомендуется "low" (см. SessionConfig/buildConfig).
                 val thinkingLevel = config.latencyProfile.thinkingLevel
                 if (thinkingLevel != null) {
                     put("thinkingConfig", buildJsonObject {
@@ -285,7 +321,6 @@ class GeminiLiveClient(
                 }
             })
 
-            // ─── systemInstruction ───
             if (config.systemInstruction.isNotBlank()) {
                 put("systemInstruction", buildJsonObject {
                     put("parts", buildJsonArray {
@@ -294,7 +329,6 @@ class GeminiLiveClient(
                 })
             }
 
-            // ─── realtimeInputConfig ───
             put("realtimeInputConfig", buildJsonObject {
                 put("automaticActivityDetection", buildJsonObject {
                     put("disabled", !config.autoActivityDetection)
@@ -309,24 +343,16 @@ class GeminiLiveClient(
                 put("turnCoverage", config.turnCoverage)
             })
 
-            // ─── Транскрипция ───
-            if (config.inputTranscription) {
-                put("inputAudioTranscription", buildJsonObject {})
-            }
-            if (config.outputTranscription) {
-                put("outputAudioTranscription", buildJsonObject {})
-            }
+            if (config.inputTranscription) put("inputAudioTranscription", buildJsonObject {})
+            if (config.outputTranscription) put("outputAudioTranscription", buildJsonObject {})
 
-            // ─── Session Resumption ───
-            // Если sessionResumption включён, но handle == null — сервер начнёт
-            // НОВУЮ сессию (это и есть желаемое поведение при смене языка).
+            // sessionResumption включён, handle == null → сервер начнёт НОВУЮ сессию.
             if (config.enableSessionResumption) {
                 put("sessionResumption", buildJsonObject {
                     config.sessionHandle?.let { put("handle", it) }
                 })
             }
 
-            // ─── Context Compression ───
             if (config.enableContextCompression) {
                 put("contextWindowCompression", buildJsonObject {
                     if (config.compressionTriggerTokens > 0L)
@@ -340,9 +366,9 @@ class GeminiLiveClient(
         })
     }
 
-    // ════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════════
     //  CLIENT → SERVER
-    // ════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════════
 
     override fun sendAudio(chunk: MicAudioChunk) {
         val ws = webSocket
@@ -355,9 +381,11 @@ class GeminiLiveClient(
             return
         }
         try {
+            // Быстрый путь: строим JSON-строку напрямую, без аллокации JsonObject
+            // на каждый аудио-кадр (40 мс). realtimeInput.audio — по докам.
             val b64 = Base64.encodeToString(chunk.data, 0, chunk.length, Base64.NO_WRAP)
             val raw = """{"realtimeInput":{"audio":{"data":"$b64","mimeType":"audio/pcm;rate=${SessionConfig.INPUT_SAMPLE_RATE}"}}}"""
-            val logStub = """{"realtimeInput":{"audio":{"data":"<HIDDEN_BASE64_FOR_MEM_SAFETY>","mimeType":"audio/pcm;rate=${SessionConfig.INPUT_SAMPLE_RATE}"}}}"""
+            val logStub = """{"realtimeInput":{"audio":{"data":"<HIDDEN_BASE64>","mimeType":"audio/pcm;rate=${SessionConfig.INPUT_SAMPLE_RATE}"}}}"""
             trackSentFrame(logStub)
             ws.send(raw)
         } catch (e: Exception) {
@@ -370,6 +398,7 @@ class GeminiLiveClient(
     override fun sendRealtimeText(text: String) {
         val ws = webSocket
         if (!isReady || ws == null) return
+        // Для 3.1 текст во время диалога шлётся через realtimeInput.text.
         val raw = buildJsonObject {
             put("realtimeInput", buildJsonObject { put("text", text) })
         }.toString()
@@ -384,6 +413,10 @@ class GeminiLiveClient(
     }
 
     override fun sendTurnComplete() {
+        // ПРИМЕЧАНИЕ: в режиме переводчика используется автоматический VAD,
+        // поэтому ручной turnComplete не нужен. На Gemini 3.1 clientContent
+        // поддерживается лишь для seeding начальной истории — здесь оставлено
+        // только для совместимости интерфейса.
         val ws = webSocket
         if (!isReady || ws == null) return
         val raw = buildJsonObject {
@@ -411,112 +444,102 @@ class GeminiLiveClient(
         trackSentFrame(raw); ws.send(raw)
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  SERVER → CLIENT
-    // ════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════════
+    //  SERVER → CLIENT (выполняется на парсер-корутине, НЕ на потоке OkHttp)
+    // ════════════════════════════════════════════════════════════════════
 
     private fun parseServerMessage(raw: String) {
-        try {
-            val root = json.parseToJsonElement(raw).jsonObject
+        val root = json.parseToJsonElement(raw).jsonObject
 
-            if (root.containsKey("setupComplete")) {
-                logger.d("✓ SETUP COMPLETE")
-                cancelSetupWatchdog()
-                isReady = true
-                activeTurnId = currentTurnId.incrementAndGet()
-                _events.tryEmit(GeminiEvent.SetupComplete)
+        if (root.containsKey("setupComplete")) {
+            logger.d("✓ SETUP COMPLETE")
+            cancelSetupWatchdog()
+            isReady = true
+            activeTurnId = currentTurnId.incrementAndGet()
+            _events.tryEmit(GeminiEvent.SetupComplete)
+        }
+
+        root["toolCallCancellation"]?.jsonObject?.let { cancellation ->
+            val ids = cancellation["ids"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
+            _events.tryEmit(GeminiEvent.ToolCallCancellation(ids))
+        }
+
+        root["toolCall"]?.jsonObject?.let { tc ->
+            val calls = tc["functionCalls"]?.jsonArray?.mapNotNull { fc ->
+                val obj = fc.jsonObject
+                val name = obj["name"]?.jsonPrimitive?.content ?: return@mapNotNull null
+                val id = obj["id"]?.jsonPrimitive?.content ?: return@mapNotNull null
+                val args = obj["args"]?.jsonObject?.mapValues { it.value.toString() } ?: emptyMap()
+                FunctionCall(name, id, args)
+            } ?: emptyList()
+            if (calls.isNotEmpty()) _events.tryEmit(GeminiEvent.ToolCall(calls))
+        }
+
+        root["sessionResumptionUpdate"]?.jsonObject?.let { update ->
+            val resumable = update["resumable"]?.jsonPrimitive?.booleanOrNull ?: false
+            val newHandle = update["newHandle"]?.jsonPrimitive?.content
+            val lastConsumed = update["lastConsumedClientMessageIndex"]?.jsonPrimitive?.longOrNull
+            if (newHandle != null && resumable) {
+                sessionHandle = newHandle
+                _events.tryEmit(GeminiEvent.SessionHandleUpdate(newHandle, resumable, lastConsumed))
             }
+        }
 
-            root["toolCallCancellation"]?.jsonObject?.let { cancellation ->
-                val ids = cancellation["ids"]?.jsonArray
-                    ?.map { it.jsonPrimitive.content } ?: emptyList()
-                _events.tryEmit(GeminiEvent.ToolCallCancellation(ids))
-            }
+        root["goAway"]?.jsonObject?.let { goAway ->
+            val timeLeft = goAway["timeLeft"]?.jsonPrimitive?.content
+            _events.tryEmit(GeminiEvent.GoAway(timeLeft))
+        }
 
-            root["toolCall"]?.jsonObject?.let { tc ->
-                val calls = tc["functionCalls"]?.jsonArray?.mapNotNull { fc ->
-                    val obj = fc.jsonObject
-                    val name = obj["name"]?.jsonPrimitive?.content ?: return@mapNotNull null
-                    val id = obj["id"]?.jsonPrimitive?.content ?: return@mapNotNull null
-                    val args = obj["args"]?.jsonObject?.mapValues { it.value.toString() } ?: emptyMap()
-                    com.translator.app.domain.model.FunctionCall(name, id, args)
-                } ?: emptyList()
+        root["usageMetadata"]?.jsonObject?.let { usage ->
+            val prompt = usage["promptTokenCount"]?.jsonPrimitive?.intOrNull ?: 0
+            val resp = (usage["responseTokenCount"] ?: usage["candidatesTokenCount"])
+                ?.jsonPrimitive?.intOrNull ?: 0
+            val total = usage["totalTokenCount"]?.jsonPrimitive?.intOrNull ?: 0
+            _events.tryEmit(GeminiEvent.UsageMetadata(prompt, resp, total))
+        }
 
-                if (calls.isNotEmpty()) {
-                    _events.tryEmit(GeminiEvent.ToolCall(calls))
+        root["serverContent"]?.jsonObject?.let { sc ->
+            // ── 1. Транскрипция (multi-part: может прийти вместе с аудио) ──
+            sc["inputTranscription"]?.jsonObject?.get("text")?.jsonPrimitive?.content
+                ?.takeIf { it.isNotBlank() }
+                ?.let { _events.tryEmit(GeminiEvent.InputTranscript(it)) }
+
+            sc["outputTranscription"]?.jsonObject?.get("text")?.jsonPrimitive?.content
+                ?.takeIf { it.isNotBlank() }
+                ?.let { _events.tryEmit(GeminiEvent.OutputTranscript(it)) }
+
+            // ── 2. modelTurn: текст + аудио. ВАЖНО: тегируем аудио ТЕКУЩИМ ходом
+            //       ДО обработки границ (turnComplete/interrupted ниже), иначе
+            //       хвостовое аудио попадёт в следующий ход и будет отброшено. ──
+            val turnForThisFrame = activeTurnId
+            (sc["modelTurn"]?.jsonObject?.get("parts") as? JsonArray)?.forEach { part ->
+                val obj = part.jsonObject
+                obj["text"]?.jsonPrimitive?.content?.let {
+                    _events.tryEmit(GeminiEvent.ModelText(it))
                 }
-            }
-
-            root["sessionResumptionUpdate"]?.jsonObject?.let { update ->
-                val resumable = update["resumable"]?.jsonPrimitive?.booleanOrNull ?: false
-                val newHandle = update["newHandle"]?.jsonPrimitive?.content
-                val lastConsumed = update["lastConsumedClientMessageIndex"]
-                    ?.jsonPrimitive?.longOrNull
-                if (newHandle != null && resumable) {
-                    sessionHandle = newHandle
-                    _events.tryEmit(GeminiEvent.SessionHandleUpdate(newHandle, resumable, lastConsumed))
-                }
-            }
-
-            root["goAway"]?.jsonObject?.let { goAway ->
-                val timeLeft = goAway["timeLeft"]?.jsonPrimitive?.content
-                _events.tryEmit(GeminiEvent.GoAway(timeLeft))
-            }
-
-            root["usageMetadata"]?.jsonObject?.let { usage ->
-                val prompt = usage["promptTokenCount"]?.jsonPrimitive?.intOrNull ?: 0
-                val resp = (usage["responseTokenCount"] ?: usage["candidatesTokenCount"])
-                    ?.jsonPrimitive?.intOrNull ?: 0
-                val total = usage["totalTokenCount"]?.jsonPrimitive?.intOrNull ?: 0
-                _events.tryEmit(GeminiEvent.UsageMetadata(prompt, resp, total))
-            }
-
-            root["serverContent"]?.jsonObject?.let { sc ->
-                sc["inputTranscription"]?.jsonObject
-                    ?.get("text")?.jsonPrimitive?.content
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { _events.tryEmit(GeminiEvent.InputTranscript(it)) }
-
-                sc["outputTranscription"]?.jsonObject
-                    ?.get("text")?.jsonPrimitive?.content
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { _events.tryEmit(GeminiEvent.OutputTranscript(it)) }
-
-                if (sc["interrupted"]?.jsonPrimitive?.booleanOrNull == true) {
-                    activeTurnId = currentTurnId.incrementAndGet()
-                    _events.tryEmit(GeminiEvent.Interrupted)
-                }
-
-                if (sc["turnComplete"]?.jsonPrimitive?.booleanOrNull == true) {
-                    activeTurnId = currentTurnId.incrementAndGet()
-                    _events.tryEmit(GeminiEvent.TurnComplete)
-                }
-
-                if (sc["generationComplete"]?.jsonPrimitive?.booleanOrNull == true) {
-                    _events.tryEmit(GeminiEvent.GenerationComplete)
-                }
-
-                (sc["modelTurn"]?.jsonObject?.get("parts") as? JsonArray)?.let { parts ->
-                    val turnForThisFrame = activeTurnId
-                    for (part in parts) {
-                        val obj = part.jsonObject
-                        obj["text"]?.jsonPrimitive?.content?.let {
-                            _events.tryEmit(GeminiEvent.ModelText(it))
-                        }
-                        obj["inlineData"]?.jsonObject?.let { inline ->
-                            val mime = inline["mimeType"]?.jsonPrimitive?.content.orEmpty()
-                            if (mime.startsWith("audio/pcm")) {
-                                inline["data"]?.jsonPrimitive?.content?.let { b64 ->
-                                    val pcm = Base64.decode(b64, Base64.DEFAULT)
-                                    _events.tryEmit(GeminiEvent.AudioChunk(pcm, turnForThisFrame))
-                                }
-                            }
+                obj["inlineData"]?.jsonObject?.let { inline ->
+                    val mime = inline["mimeType"]?.jsonPrimitive?.content.orEmpty()
+                    if (mime.startsWith("audio/pcm")) {
+                        inline["data"]?.jsonPrimitive?.content?.let { b64 ->
+                            val pcm = Base64.decode(b64, Base64.DEFAULT)
+                            _events.tryEmit(GeminiEvent.AudioChunk(pcm, turnForThisFrame))
                         }
                     }
                 }
             }
-        } catch (e: Exception) {
-            logger.e("PARSE ERROR: ${e.message}", e)
+
+            // ── 3. Границы хода (инкремент ПОСЛЕ тегирования аудио) ──
+            if (sc["interrupted"]?.jsonPrimitive?.booleanOrNull == true) {
+                activeTurnId = currentTurnId.incrementAndGet()
+                _events.tryEmit(GeminiEvent.Interrupted)
+            }
+            if (sc["turnComplete"]?.jsonPrimitive?.booleanOrNull == true) {
+                activeTurnId = currentTurnId.incrementAndGet()
+                _events.tryEmit(GeminiEvent.TurnComplete)
+            }
+            if (sc["generationComplete"]?.jsonPrimitive?.booleanOrNull == true) {
+                _events.tryEmit(GeminiEvent.GenerationComplete)
+            }
         }
     }
 
