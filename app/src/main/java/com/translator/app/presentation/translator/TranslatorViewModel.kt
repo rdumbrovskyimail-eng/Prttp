@@ -1,3 +1,26 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// Путь: app/src/main/java/com/translator/app/presentation/translator/TranslatorViewModel.kt
+//
+// ПОЛНАЯ ЗАМЕНА (v4.0 — лёгкий аудио-путь)
+//
+// ГЛАВНЫЙ ФИКС «молчит, а текст появляется»:
+//   Раньше на КАЖДЫЙ аудио-чанк обработчик делал _state.update {} (рекомпозиция)
+//   и startStuckTurnWatchdog() (отмена+запуск корутины). Десятки раз за реплику
+//   это забивало главный поток → коллектор событий отставал → SharedFlow с
+//   DROP_OLDEST выкидывал аудио-чанки, а редкая транскрипция проскакивала.
+//
+//   Теперь обработчик аудио-чанка «лёгкий»:
+//     • отдаём PCM движку (enqueuePlayback — это лишь trySend, не блокирует),
+//     • состояние isAiSpeaking и вотчдог взводятся ОДИН раз на ход,
+//     • никаких per-chunk запусков корутин.
+//   Вместе с выделенным playback-потоком движка и буфером ~200мс это убирает
+//   потери аудио.
+//
+// Дополнительно: убран дубль логирования транскриптов.
+//
+// Вся остальная логика (смена языковой пары, реконнект, мониторинг сети,
+// foreground-сервис, пары транскриптов) сохранена без изменений поведения.
+// ═══════════════════════════════════════════════════════════════════════════
 package com.translator.app.presentation.translator
 
 import android.Manifest
@@ -25,16 +48,18 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 
 enum class ConnectionStatus { Disconnected, Connecting, Reconnecting, Ready, Recording }
@@ -103,11 +128,9 @@ class TranslatorViewModel @Inject constructor(
     @Volatile private var activeApiKey: String = ""
     @Volatile private var fgsStarted: Boolean = false
 
-    // Был ли потерян интернет — для немедленного реконнекта при восстановлении.
     private val networkLost = AtomicBoolean(false)
 
-    // Mutex для сериализации операций смены сессии (язык/реконнект),
-    // чтобы исключить гонки между переключением языков и автореконнектом.
+    // Сериализует операции смены сессии (язык/реконнект), исключая гонки.
     private val sessionMutex = Mutex()
 
     init {
@@ -116,6 +139,10 @@ class TranslatorViewModel @Inject constructor(
         observeNetwork()
         observeLanguageSettings()
     }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  LANGUAGE
+    // ════════════════════════════════════════════════════════════════════
 
     private fun observeLanguageSettings() {
         viewModelScope.launch {
@@ -162,59 +189,36 @@ class TranslatorViewModel @Inject constructor(
     }
 
     /**
-     * ЖЁСТКИЙ сброс при смене языковой пары.
-     *
-     * КРИТИЧНО: при смене языков мы НЕ должны переиспользовать sessionHandle,
-     * иначе Gemini восстанавливает предыдущий контекст со старым system instruction
-     * и историей — модель продолжает переводить на старый язык, "залипает" на
-     * прошлой паре, иногда даже мешает оба языка. Поэтому здесь:
-     *
-     *   1) Отменяем ВСЕ фоновые корутины (mic, reconnect, watchdog, network).
-     *   2) Полностью гасим аудио (capture + playback).
-     *   3) Дисконнектим клиента.
-     *   4) Сбрасываем sessionHandle на стороне клиента (resetSession()).
-     *   5) Сбрасываем все per-turn флаги.
-     *   6) Чистим UI-state.
-     *   7) Подключаемся заново с freshSession = true.
+     * ЖЁСТКИЙ сброс при смене языковой пары: при смене языков нельзя
+     * переиспользовать sessionHandle, иначе Gemini восстановит старый
+     * system instruction/историю и продолжит переводить на старый язык.
      */
     private suspend fun hardResetForNewLanguagePair(freshSettings: AppSettings) = sessionMutex.withLock {
         val status = _state.value.connectionStatus
         if (status == ConnectionStatus.Disconnected) {
-            // Не было активной сессии — просто кэшируем настройки, при следующем startSession()
-            // промт уже построится из новых языков.
             cachedSettings = freshSettings
             return@withLock
         }
         logger.d("🔄 Language pair changed → ${freshSettings.sourceLanguageCode}↔${freshSettings.targetLanguageCode}, HARD reset")
 
-        // 1) Гасим все фоновые задачи строго в правильном порядке.
         reconnectJob?.cancelAndJoin(); reconnectJob = null
         reconnectAttempt.set(0L)
-
         stuckTurnWatchdogJob?.cancelAndJoin(); stuckTurnWatchdogJob = null
-
         micJob?.cancelAndJoin(); micJob = null
 
-        // 2) Аудио — полная остановка и сброс буферов.
         runCatching { audioEngine.stopCapture() }
         runCatching { audioEngine.flushPlayback() }
-        runCatching { audioEngine.onTurnComplete() } // финализирует jitter-буфер
+        runCatching { audioEngine.onTurnComplete() }
 
-        // 3) Дисконнект клиента.
         runCatching { liveClient.disconnect() }
-
-        // 4) Сбрасываем sessionHandle. Если в LiveClient нет такого метода —
-        //    см. примечание ниже, нужно добавить.
         runCatching { liveClient.resetSession() }
 
-        // 5) Сбрасываем per-turn флаги.
         hasModelOutputThisTurn.set(false)
         lastAiAudioChunkAtMs.set(0L)
         lastSeenTurnId.set(Long.MIN_VALUE)
         currentOpenPairId = null
         nextPairId = 1L
 
-        // 6) UI: чистый старт.
         _state.update {
             it.copy(
                 pairs = emptyList(),
@@ -225,14 +229,16 @@ class TranslatorViewModel @Inject constructor(
             )
         }
 
-        // Маленькая пауза, чтобы старый WebSocket гарантированно закрылся и
-        // сервер не путал старую и новую сессии.
+        // Пауза, чтобы старый WebSocket гарантированно закрылся.
         delay(150)
 
-        // 7) Свежая сессия — БЕЗ sessionHandle.
         cachedSettings = freshSettings
         connectInternal(freshSession = true)
     }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  SESSION
+    // ════════════════════════════════════════════════════════════════════
 
     private fun hasMicPermission(): Boolean =
         ContextCompat.checkSelfPermission(
@@ -259,7 +265,6 @@ class TranslatorViewModel @Inject constructor(
             }
             currentOpenPairId = null
             reconnectAttempt.set(0L)
-            // Любой явный старт сессии — это свежий старт.
             runCatching { liveClient.resetSession() }
 
             audioEngine.updateJitterConfig(
@@ -326,10 +331,9 @@ class TranslatorViewModel @Inject constructor(
         viewModelScope.launch {
             reconnectJob?.cancelAndJoin(); reconnectJob = null
             reconnectAttempt.set(0L)
-
             stuckTurnWatchdogJob?.cancelAndJoin(); stuckTurnWatchdogJob = null
-
             micJob?.cancelAndJoin(); micJob = null
+
             runCatching { audioEngine.stopCapture() }
             runCatching { audioEngine.flushPlayback() }
             runCatching { liveClient.disconnect() }
@@ -367,10 +371,8 @@ class TranslatorViewModel @Inject constructor(
         _state.update { it.copy(isMicActive = true, connectionStatus = ConnectionStatus.Recording) }
         micJob = viewModelScope.launch {
             audioEngine.startCapture()
-            audioEngine.micOutput.collect { chunk ->
-                try { liveClient.sendAudio(chunk) }
-                finally { chunk.release() }
-            }
+            // sendAudio сам освобождает chunk в finally → здесь release не нужен.
+            audioEngine.micOutput.collect { chunk -> liveClient.sendAudio(chunk) }
         }
     }
 
@@ -382,6 +384,10 @@ class TranslatorViewModel @Inject constructor(
             _state.update { it.copy(isMicActive = false, connectionStatus = ConnectionStatus.Ready) }
         }
     }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  EVENTS  (коллектор на главном потоке; обработчики «лёгкие»)
+    // ════════════════════════════════════════════════════════════════════
 
     private fun observeGeminiEvents() {
         viewModelScope.launch {
@@ -398,62 +404,60 @@ class TranslatorViewModel @Inject constructor(
                             ) startMic()
                         }
                     }
+
                     is GeminiEvent.AudioChunk -> {
                         // Отсекаем stale-чанки старых ходов.
                         if (event.turnId < lastSeenTurnId.get()) return@collect
-                        if (event.turnId > lastSeenTurnId.get()) {
-                            lastSeenTurnId.set(event.turnId)
-                        }
+                        if (event.turnId > lastSeenTurnId.get()) lastSeenTurnId.set(event.turnId)
 
                         lastAiAudioChunkAtMs.set(System.currentTimeMillis())
-                        hasModelOutputThisTurn.set(true)
-                        _state.update { it.copy(isAiSpeaking = true) }
+                        // ЛЁГКО: только передаём PCM движку (trySend, не блокирует).
                         audioEngine.enqueuePlayback(event.pcmData)
-                        startStuckTurnWatchdog()
-                    }
-                    is GeminiEvent.InputTranscript -> {
-                        // Лог
-                        logger.i("📝 IN : ${event.text}")
-                        logger.i("📝 INPUT  TRANSCRIPT: ${event.text}")
-                        val entry = TranscriptEntry(
-                            direction = TranscriptDirection.INPUT,
-                            text = event.text
-                        )
-                        _state.update { it.copy(
-                            lastInputTranscript = event.text,
-                            transcriptLog = (it.transcriptLog + entry).takeLast(200)
-                        )}
 
-                        // Существующая логика пар
+                        // Состояние и вотчдог — ОДИН раз на ход, не на каждый чанк.
+                        if (hasModelOutputThisTurn.compareAndSet(false, true)) startStuckTurnWatchdog()
+                        if (!_state.value.isAiSpeaking) _state.update { it.copy(isAiSpeaking = true) }
+                    }
+
+                    is GeminiEvent.InputTranscript -> {
+                        logger.i("📝 IN : ${event.text}")
+                        val entry = TranscriptEntry(direction = TranscriptDirection.INPUT, text = event.text)
                         val pairId = currentOpenPairId ?: openNewPair()
                         updatePair(pairId) {
                             val nt = it.originalText + event.text
-                            it.copy(originalText = nt, originalLang = pickLangLabel(nt, _state.value.sourceLanguage, _state.value.targetLanguage))
+                            it.copy(
+                                originalText = nt,
+                                originalLang = pickLangLabel(nt, _state.value.sourceLanguage, _state.value.targetLanguage)
+                            )
+                        }
+                        _state.update {
+                            it.copy(
+                                lastInputTranscript = event.text,
+                                transcriptLog = (it.transcriptLog + entry).takeLast(200)
+                            )
                         }
                     }
 
                     is GeminiEvent.OutputTranscript -> {
-                        // Лог
                         logger.i("📝 OUT: ${event.text}")
-                        logger.i("📝 OUTPUT TRANSCRIPT: ${event.text}")
-                        val entry = TranscriptEntry(
-                            direction = TranscriptDirection.OUTPUT,
-                            text = event.text
-                        )
-                        _state.update { it.copy(
-                            lastOutputTranscript = event.text,
-                            transcriptLog = (it.transcriptLog + entry).takeLast(200)
-                        )}
-
-                        // Существующая логика пар
+                        val entry = TranscriptEntry(direction = TranscriptDirection.OUTPUT, text = event.text)
                         val pairId = currentOpenPairId ?: openNewPair()
                         updatePair(pairId) {
                             val nt = it.translationText + event.text
-                            it.copy(translationText = nt, translationLang = pickLangLabel(nt, _state.value.sourceLanguage, _state.value.targetLanguage))
+                            it.copy(
+                                translationText = nt,
+                                translationLang = pickLangLabel(nt, _state.value.sourceLanguage, _state.value.targetLanguage)
+                            )
                         }
-                        hasModelOutputThisTurn.set(true)
-                        startStuckTurnWatchdog()
+                        _state.update {
+                            it.copy(
+                                lastOutputTranscript = event.text,
+                                transcriptLog = (it.transcriptLog + entry).takeLast(200)
+                            )
+                        }
+                        if (hasModelOutputThisTurn.compareAndSet(false, true)) startStuckTurnWatchdog()
                     }
+
                     is GeminiEvent.Interrupted -> {
                         runCatching { audioEngine.flushPlayback() }
                         _state.update { it.copy(isAiSpeaking = false) }
@@ -462,6 +466,7 @@ class TranslatorViewModel @Inject constructor(
                         stuckTurnWatchdogJob?.cancel()
                         finalizeOpenPair()
                     }
+
                     is GeminiEvent.TurnComplete -> {
                         audioEngine.onTurnComplete()
                         _state.update { it.copy(isAiSpeaking = false) }
@@ -470,13 +475,13 @@ class TranslatorViewModel @Inject constructor(
                         stuckTurnWatchdogJob?.cancel()
                         finalizeOpenPair()
                     }
+
                     is GeminiEvent.GenerationComplete -> {
                         _state.update { it.copy(isAiSpeaking = false) }
                         stuckTurnWatchdogJob?.cancel()
-                        currentOpenPairId?.let { id ->
-                            updatePair(id) { it.copy(translationIsFinal = true) }
-                        }
+                        currentOpenPairId?.let { id -> updatePair(id) { it.copy(translationIsFinal = true) } }
                     }
+
                     is GeminiEvent.UsageMetadata -> {
                         if (cachedSettings.showUsageMetadata) {
                             _state.update {
@@ -488,11 +493,14 @@ class TranslatorViewModel @Inject constructor(
                             }
                         }
                     }
-                    is GeminiEvent.SessionHandleUpdate -> { /* handle stored inside client */ }
+
+                    is GeminiEvent.SessionHandleUpdate -> { /* handle хранится в клиенте */ }
+
                     is GeminiEvent.GoAway -> {
                         logger.w("GoAway received: ${event.timeLeft}. Scheduling reconnect.")
                         scheduleReconnect()
                     }
+
                     is GeminiEvent.Disconnected -> {
                         micJob?.cancel(); micJob = null
                         audioEngine.stopCapture()
@@ -525,9 +533,13 @@ class TranslatorViewModel @Inject constructor(
 
                         if (!isGraceful) scheduleReconnect()
                     }
+
                     is GeminiEvent.ConnectionError -> {
                         _state.update { it.copy(error = event.message) }
                     }
+
+                    is GeminiEvent.Connected -> { /* статус Ready ставим по SetupComplete */ }
+
                     else -> {}
                 }
             }
@@ -543,21 +555,24 @@ class TranslatorViewModel @Inject constructor(
                     logger.w("Network lost")
                     return@collect
                 }
-                // Восстановление сети — если мы были в Disconnected, мгновенный реконнект.
                 if (networkLost.compareAndSet(true, false)) {
                     logger.d("Network restored — fast reconnect")
                     if (_state.value.connectionStatus == ConnectionStatus.Disconnected &&
-                        activeApiKey.isNotEmpty()) {
+                        activeApiKey.isNotEmpty()
+                    ) {
                         reconnectJob?.cancel()
                         reconnectAttempt.set(0L)
                         _state.update { it.copy(connectionStatus = ConnectionStatus.Reconnecting) }
-                        // Реконнект после потери сети — можно с handle (это штатный resume).
                         reconnectJob = launch { connectInternal(freshSession = false) }
                     }
                 }
             }
         }
     }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  PAIRS / TRANSCRIPT HELPERS
+    // ════════════════════════════════════════════════════════════════════
 
     private fun finalizeOpenPair() {
         val openId = currentOpenPairId ?: return
@@ -591,12 +606,10 @@ class TranslatorViewModel @Inject constructor(
         reconnectJob?.cancel()
         reconnectJob = viewModelScope.launch {
             delay(delayMs)
-            // Не реконнектимся если сеть ещё лежит — networkMonitor сам триггернёт когда восстановится.
             if (networkLost.get()) {
                 logger.d("Reconnect deferred — no network yet")
                 return@launch
             }
-            // Автореконнект — с handle (штатное session resumption).
             connectInternal(freshSession = false)
         }
     }
@@ -614,7 +627,6 @@ class TranslatorViewModel @Inject constructor(
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
     fun exportTranscriptLog(): String {
         val entries = _state.value.transcriptLog
         if (entries.isEmpty()) return "Лог пуст"
@@ -626,9 +638,7 @@ class TranslatorViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Определяет, к какому из двух выбранных языков ближе фрагмент текста.
-     */
+    /** К какому из двух выбранных языков ближе фрагмент текста. */
     private fun pickLangLabel(text: String, src: Language, tgt: Language): String {
         if (text.isBlank()) return ""
         val script = dominantScript(text)
@@ -636,12 +646,10 @@ class TranslatorViewModel @Inject constructor(
         val tgtScript = scriptForCode(tgt.code)
         val matched = when {
             script == null -> src.code
-            // Оба языка в одном скрипте (например PL↔DE — оба латиница):
-            // не различаем по символам, считаем что первая транскрипция — source.
-            srcScript == tgtScript -> src.code
+            srcScript == tgtScript -> src.code   // оба в одном письме — не различаем по символам
             script == srcScript -> src.code
             script == tgtScript -> tgt.code
-            else -> src.code  // unknown script → source как fallback
+            else -> src.code
         }
         return matched.uppercase()
     }
@@ -661,8 +669,10 @@ class TranslatorViewModel @Inject constructor(
                 ch in '\uAC00'..'\uD7AF' -> hang++
             }
         }
-        val counts = listOf("cyr" to cyr, "lat" to lat, "arab" to arab, "han" to han,
-            "deva" to deva, "thai" to thai, "hira" to hira, "hang" to hang)
+        val counts = listOf(
+            "cyr" to cyr, "lat" to lat, "arab" to arab, "han" to han,
+            "deva" to deva, "thai" to thai, "hira" to hira, "hang" to hang
+        )
         val (winner, count) = counts.maxBy { it.second }
         return if (count > 0) winner else null
     }
@@ -700,9 +710,8 @@ class TranslatorViewModel @Inject constructor(
             val now = System.currentTimeMillis()
             val lastT = lastAiAudioChunkAtMs.get()
             val sinceLast = now - lastT
-            if (lastT > 0L && sinceLast < 2_000L) {
-                startStuckTurnWatchdog(); return@launch
-            }
+            // Аудио ещё течёт — продлеваем наблюдение.
+            if (lastT > 0L && sinceLast < 2_000L) { startStuckTurnWatchdog(); return@launch }
             if (hasModelOutputThisTurn.get()) {
                 logger.w("⚠ STUCK_TURN — force finalize")
                 runCatching { audioEngine.flushPlayback() }
@@ -723,6 +732,7 @@ class TranslatorViewModel @Inject constructor(
                     audioEngine.stopCapture()
                     liveClient.disconnect()
                 }
+                runCatching { audioEngine.releaseAll() }
             }
             stopForegroundServiceSafe()
         }
