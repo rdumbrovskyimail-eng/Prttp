@@ -153,12 +153,10 @@ YOU MUST FOLLOW THESE RULES UNMISTAKABLY. NO EXCEPTIONS.
         //  • быстрый старт + barge-in, защита первого слога коротких слов
         //  • неагрессивный конец, чтобы не рвать фразу на паузах
         //  • 600 мс тишины — снаппи закрытие хода (было 800)
-        // VAD берётся из пользовательских настроек, но с защитой от обрыва концовок.
-        val translatorVadStartSensitivity = settings.vadStartSensitivity
-        val translatorVadEndSensitivity = settings.vadEndSensitivity
-        // Тишина для конца фразы не ниже 700мс — иначе режет фразы с паузами/запятыми.
-        val translatorVadSilenceDurationMs = settings.vadSilenceDurationMs.coerceAtLeast(700)
-        val translatorVadPrefixPaddingMs = settings.vadPrefixPaddingMs
+        val translatorVadStartSensitivity = "START_SENSITIVITY_HIGH"
+        val translatorVadEndSensitivity = "END_SENSITIVITY_LOW"
+        val translatorVadSilenceDurationMs = 600
+        val translatorVadPrefixPaddingMs = 300
 
         // Thinking из настроек, но не ниже Low — Off/minimal рвут длинные фразы.
         val requested = runCatching { LatencyProfile.valueOf(settings.latencyProfile) }
