@@ -189,15 +189,15 @@ class TranslatorViewModel @Inject constructor(
         }
     }
 
-    /** Текущее значение тишины для конца фразы (мс) — для UI. */
-    val vadSilenceMs = settingsStore.data
-        .map { it.vadSilenceDurationMs }
-        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, 600)
+    /** Режим "Длинные фразы" — для UI. */
+    val longPhraseMode = settingsStore.data
+        .map { it.longPhraseMode }
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, false)
 
-    /** Меняет тишину для конца фразы и переподключает сессию с новым VAD. */
-    fun setVadSilence(ms: Int) {
+    /** Переключает режим и переподключает сессию с новым VAD/barge-in. */
+    fun setLongPhraseMode(on: Boolean) {
         viewModelScope.launch {
-            val updated = settingsStore.updateData { it.copy(vadSilenceDurationMs = ms) }
+            val updated = settingsStore.updateData { it.copy(longPhraseMode = on) }
             if (_state.value.connectionStatus != ConnectionStatus.Disconnected) {
                 hardResetForNewLanguagePair(updated)
             }
@@ -426,6 +426,12 @@ class TranslatorViewModel @Inject constructor(
                         if (event.turnId < lastSeenTurnId.get()) return@collect
                         if (event.turnId > lastSeenTurnId.get()) lastSeenTurnId.set(event.turnId)
 
+                        // Полудуплекс: пока ИИ говорит — глушим микрофон, чтобы его
+                        // голос из динамика не влетел в микрофон и не оборвал перевод.
+                        if (cachedSettings.longPhraseMode && _state.value.isMicActive) {
+                            runCatching { audioEngine.stopCapture() }
+                        }
+
                         lastAiAudioChunkAtMs.set(System.currentTimeMillis())
                         // ЛЁГКО: только передаём PCM движку (trySend, не блокирует).
                         audioEngine.enqueuePlayback(event.pcmData)
@@ -500,6 +506,13 @@ class TranslatorViewModel @Inject constructor(
                         lastSeenTurnId.set(Long.MIN_VALUE)
                         stuckTurnWatchdogJob?.cancel()
                         finalizeOpenPair()
+
+                        // ИИ договорил — возвращаем микрофон (только в длинном режиме).
+                        if (cachedSettings.longPhraseMode &&
+                            _state.value.connectionStatus == ConnectionStatus.Recording
+                        ) {
+                            viewModelScope.launch { audioEngine.startCapture() }
+                        }
                     }
 
                     is GeminiEvent.GenerationComplete -> {

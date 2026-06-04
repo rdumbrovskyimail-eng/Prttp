@@ -149,16 +149,13 @@ YOU MUST FOLLOW THESE RULES UNMISTAKABLY. NO EXCEPTIONS.
         // пользовательских настроек).
         // ═══════════════════════════════════════════════════════════════════
 
-        // VAD под мгновенный turn-taking без обрезки середины фразы.
-        //  • быстрый старт + barge-in, защита первого слога коротких слов
-        //  • неагрессивный конец, чтобы не рвать фразу на паузах
-        //  • 600 мс тишины — снаппи закрытие хода (было 800)
+        // Режим "Длинные фразы": дольше ждём конец речи + полностью без barge-in.
         val translatorVadStartSensitivity = "START_SENSITIVITY_HIGH"
         val translatorVadEndSensitivity = "END_SENSITIVITY_LOW"
-        // Тишина из настроек, но не ниже 700мс — иначе длинные фразы с паузами
-        // рвутся (модель начинает переводить раньше, чем ты договорил).
-        val translatorVadSilenceDurationMs = settings.vadSilenceDurationMs.coerceAtLeast(700)
+        val translatorVadSilenceDurationMs = if (settings.longPhraseMode) 1200 else 600
         val translatorVadPrefixPaddingMs = 300
+        val translatorActivityHandling =
+            if (settings.longPhraseMode) "NO_INTERRUPTION" else settings.activityHandling
 
         // Thinking из настроек, но не ниже Low — Off/minimal рвут длинные фразы.
         val requested = runCatching { LatencyProfile.valueOf(settings.latencyProfile) }
@@ -174,7 +171,9 @@ YOU MUST FOLLOW THESE RULES UNMISTAKABLY. NO EXCEPTIONS.
 
             temperature = translatorTemperature,
             topP = settings.topP,
-            maxOutputTokens = settings.maxOutputTokens,
+            // Аудио-выход тоже расходует токены ответа: 512 хватает на ТЕКСТ длинной
+            // фразы, но НЕ на её озвучку → голос рвётся. Поднимаем потолок.
+            maxOutputTokens = settings.maxOutputTokens.coerceAtLeast(8192),
 
             voiceId = settings.voiceId,
             latencyProfile = translatorLatencyProfile,
@@ -185,7 +184,7 @@ YOU MUST FOLLOW THESE RULES UNMISTAKABLY. NO EXCEPTIONS.
             vadEndSensitivity = translatorVadEndSensitivity,
             vadSilenceDurationMs = translatorVadSilenceDurationMs,
             vadPrefixPaddingMs = translatorVadPrefixPaddingMs,
-            activityHandling = settings.activityHandling,
+            activityHandling = translatorActivityHandling,
             turnCoverage = settings.turnCoverage,
 
             systemInstruction = buildSystemInstruction(source.nameEn, target.nameEn),

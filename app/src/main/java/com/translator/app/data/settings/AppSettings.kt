@@ -75,6 +75,7 @@ data class AppSettings(
     val themeId: String = "GEM",
     val messageRevealId: String = "SOFT_FADE",
     val translatorLayoutId: String = "CLASSIC",   // "CLASSIC" | "MINIMAL"
+    val longPhraseMode: Boolean = false,
 
     // ═══════════════════ 10. DEBUG ═══════════════════
     val showDebugLog: Boolean = false,

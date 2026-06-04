@@ -103,7 +103,7 @@ fun MinimalTranslateScreen(
     viewModel: TranslatorViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val silenceMs by viewModel.vadSilenceMs.collectAsStateWithLifecycle()
+    val longMode by viewModel.longPhraseMode.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val isActive = state.connectionStatus != ConnectionStatus.Disconnected
 
@@ -171,11 +171,26 @@ fun MinimalTranslateScreen(
                 .padding(horizontal = 24.dp)
         )
 
-        SilenceSlider(
-            valueMs = silenceMs,
-            onChange = viewModel::setVadSilence,
-            modifier = Modifier.padding(horizontal = 24.dp)
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Разговор длинными фразами",
+                color = MinInk,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            androidx.compose.material3.Switch(
+                checked = longMode,
+                onCheckedChange = viewModel::setLongPhraseMode,
+                colors = androidx.compose.material3.SwitchDefaults.colors(
+                    checkedThumbColor = MinBg,
+                    checkedTrackColor = MinBlue
+                )
+            )
+        }
 
         Spacer(Modifier.height(12.dp))
 
@@ -447,35 +462,7 @@ private fun pcmPeak(pcm: ByteArray): Float {
 //  MIC BUTTON — архитектурная минималистичная пилюля
 // ════════════════════════════════════════════════════════════════════
 
-@Composable
-private fun SilenceSlider(
-    valueMs: Int,
-    onChange: (Int) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    // Локальное состояние, чтобы тащить плавно, а переподключать — только на отпускании.
-    var local by remember(valueMs) { mutableFloatStateOf(valueMs.coerceIn(700, 1400).toFloat()) }
-    Column(modifier = modifier.fillMaxWidth()) {
-        Text(
-            text = "Пауза конца фразы: ${local.toInt()} мс",
-            color = MinInk,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-        Slider(
-            value = local,
-            onValueChange = { local = it },
-            onValueChangeFinished = { onChange(local.toInt()) },
-            valueRange = 700f..1400f,
-            steps = 13,                       // шаг 50 мс
-            colors = SliderDefaults.colors(
-                thumbColor = MinBlue,
-                activeTrackColor = MinBlue,
-                inactiveTrackColor = MinBlueSoft
-            )
-        )
-    }
-}
+
 
 @Composable
 private fun MinimalMicButton(
