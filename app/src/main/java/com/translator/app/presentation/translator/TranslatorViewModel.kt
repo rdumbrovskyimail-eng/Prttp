@@ -459,21 +459,22 @@ class TranslatorViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.Interrupted -> {
-                        // Игнорируем "прерывание", прилетевшее в первые ~1500 мс речи ИИ —
-                        // это почти всегда ложный barge-in от эха собственного динамика,
-                        // а не реальная речь пользователя. Защищает концовку перевода.
+                        // Ложный barge-in от эха динамика в первые ~1500 мс речи ИИ:
+                        // НЕ сбрасываем аудио — даём переводу договориться.
                         val lastChunk = lastAiAudioChunkAtMs.get()
                         val sinceStart = System.currentTimeMillis() - lastChunk
-                        if (lastChunk > 0L && sinceStart < 1500L) {
-                            // не сбрасываем очередь — даём переводу договориться
-                        } else {
+                        val looksLikeEcho = lastChunk > 0L && sinceStart < 1500L
+
+                        if (!looksLikeEcho) {
                             runCatching { audioEngine.flushPlayback() }
-                            _state.update { it.copy(isAiSpeaking = false) }
-                            hasModelOutputThisTurn.set(false)
-                            lastSeenTurnId.set(Long.MIN_VALUE)
                             stuckTurnWatchdogJob?.cancel()
                             finalizeOpenPair()
                         }
+                        // Состояние хода сбрасываем ВСЕГДА — иначе следующий ход
+                        // решит, что его аудио "устарело", и динамик замолчит.
+                        _state.update { it.copy(isAiSpeaking = false) }
+                        hasModelOutputThisTurn.set(false)
+                        lastSeenTurnId.set(Long.MIN_VALUE)
                     }
 
                     is GeminiEvent.TurnComplete -> {
