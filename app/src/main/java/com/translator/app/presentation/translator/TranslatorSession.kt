@@ -155,7 +155,9 @@ YOU MUST FOLLOW THESE RULES UNMISTAKABLY. NO EXCEPTIONS.
         //  • 600 мс тишины — снаппи закрытие хода (было 800)
         val translatorVadStartSensitivity = "START_SENSITIVITY_HIGH"
         val translatorVadEndSensitivity = "END_SENSITIVITY_LOW"
-        val translatorVadSilenceDurationMs = 600
+        // Тишина из настроек, но не ниже 700мс — иначе длинные фразы с паузами
+        // рвутся (модель начинает переводить раньше, чем ты договорил).
+        val translatorVadSilenceDurationMs = settings.vadSilenceDurationMs.coerceAtLeast(700)
         val translatorVadPrefixPaddingMs = 300
 
         // Thinking из настроек, но не ниже Low — Off/minimal рвут длинные фразы.

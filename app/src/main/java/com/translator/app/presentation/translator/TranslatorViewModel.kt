@@ -53,6 +53,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -185,6 +186,21 @@ class TranslatorViewModel @Inject constructor(
                 )
             }
             hardResetForNewLanguagePair(updated)
+        }
+    }
+
+    /** Текущее значение тишины для конца фразы (мс) — для UI. */
+    val vadSilenceMs = settingsStore.data
+        .map { it.vadSilenceDurationMs }
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, 600)
+
+    /** Меняет тишину для конца фразы и переподключает сессию с новым VAD. */
+    fun setVadSilence(ms: Int) {
+        viewModelScope.launch {
+            val updated = settingsStore.updateData { it.copy(vadSilenceDurationMs = ms) }
+            if (_state.value.connectionStatus != ConnectionStatus.Disconnected) {
+                hardResetForNewLanguagePair(updated)
+            }
         }
     }
 

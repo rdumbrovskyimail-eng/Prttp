@@ -45,6 +45,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -101,6 +103,7 @@ fun MinimalTranslateScreen(
     viewModel: TranslatorViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val silenceMs by viewModel.vadSilenceMs.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val isActive = state.connectionStatus != ConnectionStatus.Disconnected
 
@@ -166,6 +169,12 @@ fun MinimalTranslateScreen(
                 .fillMaxWidth()
                 .height(72.dp)
                 .padding(horizontal = 24.dp)
+        )
+
+        SilenceSlider(
+            valueMs = silenceMs,
+            onChange = viewModel::setVadSilence,
+            modifier = Modifier.padding(horizontal = 24.dp)
         )
 
         Spacer(Modifier.height(12.dp))
@@ -437,6 +446,36 @@ private fun pcmPeak(pcm: ByteArray): Float {
 // ════════════════════════════════════════════════════════════════════
 //  MIC BUTTON — архитектурная минималистичная пилюля
 // ════════════════════════════════════════════════════════════════════
+
+@Composable
+private fun SilenceSlider(
+    valueMs: Int,
+    onChange: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    // Локальное состояние, чтобы тащить плавно, а переподключать — только на отпускании.
+    var local by remember(valueMs) { mutableFloatStateOf(valueMs.coerceIn(700, 1400).toFloat()) }
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = "Пауза конца фразы: ${local.toInt()} мс",
+            color = MinInk,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Slider(
+            value = local,
+            onValueChange = { local = it },
+            onValueChangeFinished = { onChange(local.toInt()) },
+            valueRange = 700f..1400f,
+            steps = 13,                       // шаг 50 мс
+            colors = SliderDefaults.colors(
+                thumbColor = MinBlue,
+                activeTrackColor = MinBlue,
+                inactiveTrackColor = MinBlueSoft
+            )
+        )
+    }
+}
 
 @Composable
 private fun MinimalMicButton(
