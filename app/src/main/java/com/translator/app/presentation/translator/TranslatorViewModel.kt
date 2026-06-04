@@ -459,12 +459,21 @@ class TranslatorViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.Interrupted -> {
-                        runCatching { audioEngine.flushPlayback() }
-                        _state.update { it.copy(isAiSpeaking = false) }
-                        hasModelOutputThisTurn.set(false)
-                        lastSeenTurnId.set(Long.MIN_VALUE)
-                        stuckTurnWatchdogJob?.cancel()
-                        finalizeOpenPair()
+                        // Игнорируем "прерывание", прилетевшее в первые ~1500 мс речи ИИ —
+                        // это почти всегда ложный barge-in от эха собственного динамика,
+                        // а не реальная речь пользователя. Защищает концовку перевода.
+                        val lastChunk = lastAiAudioChunkAtMs.get()
+                        val sinceStart = System.currentTimeMillis() - lastChunk
+                        if (lastChunk > 0L && sinceStart < 1500L) {
+                            // не сбрасываем очередь — даём переводу договориться
+                        } else {
+                            runCatching { audioEngine.flushPlayback() }
+                            _state.update { it.copy(isAiSpeaking = false) }
+                            hasModelOutputThisTurn.set(false)
+                            lastSeenTurnId.set(Long.MIN_VALUE)
+                            stuckTurnWatchdogJob?.cancel()
+                            finalizeOpenPair()
+                        }
                     }
 
                     is GeminiEvent.TurnComplete -> {
