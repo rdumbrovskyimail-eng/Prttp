@@ -16,9 +16,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
 package com.translator.app.therapy
 
-import com.translator.app.data.SessionConfig
 import com.translator.app.domain.model.JournalEntry
+import com.translator.app.domain.model.LatencyProfile
 import com.translator.app.domain.model.PatientProfile
+import com.translator.app.domain.model.SessionConfig
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -53,7 +54,7 @@ object TherapistSession {
         // на каждый вызов update_profile/log_mood, держим лёгкое «мышление» (Low):
         // отзывчиво в живом разговоре, но всё ещё с клиническим рассуждением.
         // Для более глубокого анализа можно поднять до Balanced ценой задержки.
-        latencyProfile = com.translator.app.data.LatencyProfile.Low,
+        latencyProfile = LatencyProfile.Low,
         thinkingIncludeThoughts = false,
 
         // VAD: человек делает паузы, молчит, плачет — НЕ перебиваем агрессивно.
