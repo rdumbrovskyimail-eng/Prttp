@@ -1,14 +1,9 @@
 package com.translator.app.domain.model
 
 import androidx.compose.runtime.Immutable
+import kotlinx.serialization.Serializable
 
-/**
- * Одно сообщение в истории диалога.
- * Используется для:
- * 1. Отображения в UI (VoiceScreen → transcript)
- * 2. Context restore при reconnect (отправка через clientContent)
- * 3. Будущее: сохранение в Room (Этап 7)
- */
+@Serializable
 @Immutable
 data class ConversationMessage(
     /** "user" или "model" — совпадает с Gemini API roles */
