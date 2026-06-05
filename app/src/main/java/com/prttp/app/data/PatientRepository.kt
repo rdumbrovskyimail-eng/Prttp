@@ -5,6 +5,7 @@ import com.prttp.app.data.crypto.KeystoreCrypto
 import com.prttp.app.domain.model.ClinicalFlag
 import com.prttp.app.domain.model.ConversationMessage
 import com.prttp.app.domain.model.Homework
+import com.prttp.app.domain.model.ImageTheme
 import com.prttp.app.domain.model.JournalEntry
 import com.prttp.app.domain.model.MoodLog
 import com.prttp.app.domain.model.PatientProfile
@@ -127,6 +128,12 @@ class PatientRepository @Inject constructor(
         }
 
     suspend fun setDisplayName(name: String) = mutateProfile { it.copy(displayName = name) }
+
+    suspend fun setImageTheme(theme: ImageTheme) = mutateProfile { p ->
+        p.copy(imageTheme = theme)
+    }
+
+    fun getImageTheme(): ImageTheme = _profile.value.imageTheme
 
     suspend fun addSessionNote(summary: String, observations: String, techniques: List<String>) =
         mutateProfile { p ->
