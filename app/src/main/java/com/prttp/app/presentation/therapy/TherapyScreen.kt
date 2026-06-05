@@ -75,6 +75,7 @@ fun TherapyScreen(
     onEndSession: () -> Unit,
     onOpenResources: () -> Unit,
     onDismissImage: () -> Unit,
+    onThemeChange: (ImageTheme) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val bg = Brush.verticalGradient(
@@ -192,10 +193,12 @@ fun TherapyScreen(
 
         // ── Терапевтическое изображение ──
         TherapyImageOverlay(
-            image      = state.therapyImage,
-            isLoading  = state.imageLoading,
-            onDismiss  = onDismissImage,
-            modifier   = Modifier
+            image         = state.therapyImage,
+            isLoading     = state.imageLoading,
+            currentTheme  = state.currentImageTheme,
+            onThemeChange = onThemeChange,
+            onDismiss     = onDismissImage,
+            modifier      = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = if (state.phase != TherapyPhase.Idle) 120.dp else 16.dp)
         )
