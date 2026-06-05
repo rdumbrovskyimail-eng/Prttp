@@ -1,22 +1,9 @@
-// Путь: app/src/main/java/com/translator/app/data/PatientRepository.kt
-//
-// Единый источник правды для базы пациента и дневника.
-// Хранит два зашифрованных файла во внутренней памяти приложения:
-//   • patient.bin  — PatientProfile (факты, заметки, настроение, ДЗ, флаги)
-//   • journal.bin  — список JournalEntry (пишет человек)
-//
-// Всё AES-256-GCM (KeystoreCrypto). Наружу отдаёт реактивные StateFlow,
-// чтобы экраны и ViewModel мгновенно видели изменения, как только ассистент
-// (через function-call) или пользователь что-то записал.
-//
-// Запись сериализуется через Mutex — конкурентные function-call'ы ассистента
-// и правки из UI не затрут друг друга (read-modify-write под локом).
-// ═══════════════════════════════════════════════════════════════════════════
 package com.translator.app.data
 
 import android.content.Context
 import com.translator.app.data.crypto.KeystoreCrypto
 import com.translator.app.domain.model.ClinicalFlag
+import com.translator.app.domain.model.ConversationMessage
 import com.translator.app.domain.model.Homework
 import com.translator.app.domain.model.JournalEntry
 import com.translator.app.domain.model.MoodLog
@@ -25,6 +12,7 @@ import com.translator.app.domain.model.ProfileFact
 import com.translator.app.domain.model.RiskLevel
 import com.translator.app.domain.model.SessionNote
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -59,11 +47,29 @@ class PatientRepository @Inject constructor(
     private val _journal = MutableStateFlow<List<JournalEntry>>(emptyList())
     val journal: StateFlow<List<JournalEntry>> = _journal.asStateFlow()
 
-    init { ioScope.launch { load() } }
+    // Триггер ожидания первичной расшифровки
+    private val isLoaded = CompletableDeferred<Unit>()
+
+    init {
+        ioScope.launch {
+            load()
+            isLoaded.complete(Unit) // Сигнализируем о готовности локальной памяти
+        }
+    }
 
     private suspend fun load() = withContext(Dispatchers.IO) {
         _profile.value = readProfile()
         _journal.value = readJournal()
+    }
+
+    suspend fun getProfile(): PatientProfile {
+        isLoaded.await()
+        return _profile.value
+    }
+
+    suspend fun getJournal(): List<JournalEntry> {
+        isLoaded.await()
+        return _journal.value
     }
 
     private fun readProfile(): PatientProfile {
@@ -94,10 +100,10 @@ class PatientRepository @Inject constructor(
         journalFile.writeBytes(KeystoreCrypto.encrypt(KEY_JOURNAL, bytes))
     }
 
-    /** read-modify-write профиля под локом + публикация во flow. */
     private suspend fun mutateProfile(block: (PatientProfile) -> PatientProfile) =
         writeMutex.withLock {
             withContext(Dispatchers.IO) {
+                isLoaded.await() // Блокируем гонки данных
                 val updated = block(_profile.value).copy(updatedAt = System.currentTimeMillis())
                 persistProfile(updated)
                 _profile.value = updated
@@ -107,13 +113,12 @@ class PatientRepository @Inject constructor(
     private suspend fun mutateJournal(block: (List<JournalEntry>) -> List<JournalEntry>) =
         writeMutex.withLock {
             withContext(Dispatchers.IO) {
+                isLoaded.await() // Блокируем гонки данных
                 val updated = block(_journal.value)
                 persistJournal(updated)
                 _journal.value = updated
             }
         }
-
-    // ── Операции, которые дёргает ассистент (через TherapistToolHandler) ──────
 
     suspend fun upsertFact(category: String, key: String, value: String, confidence: Float) =
         mutateProfile { p ->
@@ -157,7 +162,9 @@ class PatientRepository @Inject constructor(
         p.copy(flags = p.flags.map { if (it.id == id) it.copy(active = false) else it })
     }
 
-    // ── Дневник (пишет человек из UI) ─────────────────────────────────────────
+    suspend fun addMessage(role: String, text: String) = mutateProfile { p ->
+        p.copy(messages = p.messages + ConversationMessage(role, text))
+    }
 
     suspend fun addJournalEntry(text: String, mood: Int?, tags: List<String>) = mutateJournal { list ->
         list + JournalEntry(UUID.randomUUID().toString(), text, mood, tags)
@@ -167,7 +174,6 @@ class PatientRepository @Inject constructor(
         list.filterNot { it.id == id }
     }
 
-    /** Полное стирание всех данных пациента (право на забвение). */
     suspend fun wipeEverything() = writeMutex.withLock {
         withContext(Dispatchers.IO) {
             runCatching { profileFile.delete() }
