@@ -55,7 +55,14 @@ class TherapyViewModel @Inject constructor(
 
     private var micJob: Job? = null
     private var reconnectJob: Job? = null
+    private var stuckTurnWatchdogJob: Job? = null
+    private var responseTimeoutJob: Job? = null
     private val sessionMutex = Mutex()
+
+    companion object {
+        private const val STUCK_TURN_TIMEOUT_MS = 45_000L
+        private const val RESPONSE_TIMEOUT_MS   = 30_000L
+    }
 
     private val lastSeenTurnId = AtomicLong(Long.MIN_VALUE)
     private val hasModelOutputThisTurn = AtomicBoolean(false)
@@ -85,13 +92,13 @@ class TherapyViewModel @Inject constructor(
     private fun observeProfileName() {
         viewModelScope.launch {
             repo.profile.collect { p ->
-                _state.update { it.copy(patientName = p.displayName) }
+                _state.update { it.copy(patientName = p.displayName, sessionCount = p.sessionCount) }
             }
         }
     }
 
     fun startSession() {
-        if (connected) return
+        if (connected || _state.value.phase == TherapyPhase.Connecting) return
         viewModelScope.launch {
             val settings = settingsStore.data.first()
             cachedSettings = settings
@@ -99,8 +106,9 @@ class TherapyViewModel @Inject constructor(
                 _state.update { it.copy(phase = TherapyPhase.Idle, lastCaption = "API-ключ не задан в настройках.") }
                 return@launch
             }
+            repo.startNewSession()
             activeApiKey = settings.apiKey
-            _state.update { it.copy(phase = TherapyPhase.Connecting) }
+            _state.update { it.copy(phase = TherapyPhase.Connecting, sessionCount = repo.getSessionCount()) }
 
             audioEngine.setPlaybackVolume(settings.playbackVolume / 100f)
             audioEngine.setMicGain(settings.micGain / 100f)
@@ -115,6 +123,8 @@ class TherapyViewModel @Inject constructor(
 
     fun endSession() {
         viewModelScope.launch {
+            stuckTurnWatchdogJob?.cancel(); stuckTurnWatchdogJob = null
+            responseTimeoutJob?.cancel(); responseTimeoutJob = null
             saveAccumulatedTurnMessages()
             reconnectJob?.cancel(); reconnectJob = null
             micJob?.cancel(); micJob = null
@@ -250,6 +260,33 @@ class TherapyViewModel @Inject constructor(
         else -> cat
     }
 
+    private fun startStuckTurnWatchdog() {
+        stuckTurnWatchdogJob?.cancel()
+        stuckTurnWatchdogJob = viewModelScope.launch {
+            delay(STUCK_TURN_TIMEOUT_MS)
+            if (_state.value.phase == TherapyPhase.AssistantSpeaking) {
+                logger.w("⚠ stuckTurnWatchdog: TurnComplete не пришёл за ${STUCK_TURN_TIMEOUT_MS}ms")
+                runCatching { audioEngine.flushPlayback() }
+                audioEngine.onTurnComplete()
+                hasModelOutputThisTurn.set(false)
+                lastSeenTurnId.set(Long.MIN_VALUE)
+                saveAccumulatedTurnMessages()
+                if (connected) _state.update { it.copy(phase = TherapyPhase.Listening, lastCaption = "") }
+            }
+        }
+    }
+
+    private fun startResponseTimeoutWatchdog() {
+        responseTimeoutJob?.cancel()
+        responseTimeoutJob = viewModelScope.launch {
+            delay(RESPONSE_TIMEOUT_MS)
+            if (_state.value.phase == TherapyPhase.Listening && connected && !hasModelOutputThisTurn.get()) {
+                logger.w("⚠ responseTimeout: ИИ не ответил за ${RESPONSE_TIMEOUT_MS}ms")
+                scheduleReconnect()
+            }
+        }
+    }
+
     private fun observeEvents() {
         viewModelScope.launch {
             liveClient.events.collect { event ->
@@ -267,7 +304,10 @@ class TherapyViewModel @Inject constructor(
                         if (event.turnId < lastSeenTurnId.get()) return@collect
                         if (event.turnId > lastSeenTurnId.get()) lastSeenTurnId.set(event.turnId)
                         audioEngine.enqueuePlayback(event.pcmData)
-                        hasModelOutputThisTurn.set(true)
+                        if (hasModelOutputThisTurn.compareAndSet(false, true)) {
+                            startStuckTurnWatchdog()
+                            responseTimeoutJob?.cancel()
+                        }
                         if (_state.value.phase != TherapyPhase.AssistantSpeaking) {
                             _state.update { it.copy(phase = TherapyPhase.AssistantSpeaking) }
                         }
@@ -275,6 +315,7 @@ class TherapyViewModel @Inject constructor(
 
                     is GeminiEvent.InputTranscript -> {
                         accumulatedUserText.append(event.text)
+                        startResponseTimeoutWatchdog()
                     }
 
                     is GeminiEvent.OutputTranscript -> {
@@ -298,20 +339,22 @@ class TherapyViewModel @Inject constructor(
                     is GeminiEvent.ToolCallCancellation -> {}
 
                     is GeminiEvent.Interrupted -> {
+                        stuckTurnWatchdogJob?.cancel(); stuckTurnWatchdogJob = null
+                        responseTimeoutJob?.cancel(); responseTimeoutJob = null
                         runCatching { audioEngine.flushPlayback() }
                         hasModelOutputThisTurn.set(false)
                         lastSeenTurnId.set(Long.MIN_VALUE)
                         if (connected) _state.update { it.copy(phase = TherapyPhase.Listening) }
-                        
                         saveAccumulatedTurnMessages()
                     }
 
                     is GeminiEvent.TurnComplete -> {
+                        stuckTurnWatchdogJob?.cancel(); stuckTurnWatchdogJob = null
+                        responseTimeoutJob?.cancel(); responseTimeoutJob = null
                         audioEngine.onTurnComplete()
                         hasModelOutputThisTurn.set(false)
                         lastSeenTurnId.set(Long.MIN_VALUE)
-                        if (connected) _state.update { it.copy(phase = TherapyPhase.Listening) }
-                        
+                        if (connected) _state.update { it.copy(phase = TherapyPhase.Listening, lastCaption = "") }
                         saveAccumulatedTurnMessages()
                     }
 
