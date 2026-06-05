@@ -164,17 +164,15 @@ class PatientRepository @Inject constructor(
         })
     }
 
-    /** Вызвать в начале каждой сессии. Инкрементирует счётчик, генерирует UUID. */
-    suspend fun startNewSession(): String = writeMutex.withLock {
-        val newId = java.util.UUID.randomUUID().toString()
-        val updated = _profile.value.copy(
-            sessionCount = _profile.value.sessionCount + 1,
-            currentSessionId = newId,
-            updatedAt = System.currentTimeMillis()
-        )
-        _profile.value = updated
-        withContext(Dispatchers.IO) { persistProfile(updated) }
-        newId
+    suspend fun startNewSession(): String {
+        val newId = UUID.randomUUID().toString()
+        mutateProfile { p ->
+            p.copy(
+                sessionCount = p.sessionCount + 1,
+                currentSessionId = newId
+            )
+        }
+        return newId
     }
 
     fun getSessionCount(): Int = _profile.value.sessionCount
