@@ -4,12 +4,12 @@ import androidx.compose.runtime.Composable
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.translator.app.presentation.crisis.CrisisResourcesScreen
 import com.translator.app.presentation.debug.DebugLogsScreen
-import com.translator.app.presentation.journal.JournalScreen
 import com.translator.app.presentation.onboarding.OnboardingScreen
-import com.translator.app.presentation.profile.ProfileScreen
 import com.translator.app.presentation.settings.SettingsScreen
+import com.translator.app.presentation.therapy.JournalScreen
+import com.translator.app.presentation.therapy.ProfileScreen
+import com.translator.app.presentation.therapy.CrisisResourcesScreen
 import com.translator.app.presentation.therapy.TherapyRoute
 import com.translator.app.presentation.theme.ThemeViewModel
 import com.translator.app.presentation.translator.MinimalTranslateScreen
