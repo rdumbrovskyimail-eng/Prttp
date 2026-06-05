@@ -219,6 +219,7 @@ class TherapyViewModel @Inject constructor(
                 "complete_homework" -> "⚡ Выполнение ДЗ (ID: ${cleanArgs["id"]})"
                 "flag_clinical_concern" -> "⚠ Контроль рисков: флаг [${cleanArgs["level"]?.uppercase()}]"
                 "read_recent_journal" -> "⚡ Чтение дневника за ${cleanArgs["days"] ?: "14"} дн."
+                "read_dialogue_history" -> "⚡ Анализ архива: чтение последних ${cleanArgs["limit"] ?: "30"} реплик диалога"
                 "read_full_profile" -> "⚡ Анализ всей терапевтической карты"
                 else -> "⚡ Вызов: ${call.name}"
             }
