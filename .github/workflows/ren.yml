@@ -1,16 +1,5 @@
 name: Rename Package translator → rtp
 
-# Запуск вручную из вкладки Actions (workflow_dispatch).
-# Переименовывает пакет com.translator.app → com.rtp.app:
-#   1) заменяет строки package/import во всех исходниках,
-#   2) физически переносит папки com/translator/app → com/rtp/app,
-#   3) правит namespace/applicationId в gradle,
-#   4) коммитит и пушит изменения обратно в ветку.
-#
-# ВНИМАНИЕ: меняется и applicationId → это БУДЕТ ДРУГОЕ приложение
-# (новая установка, старые данные/ключ Keystore не подхватятся).
-# Если applicationId менять НЕ нужно — см. блок "KEEP_APP_ID" ниже.
-
 on:
   workflow_dispatch:
     inputs:
@@ -39,8 +28,7 @@ jobs:
           OLD_DIR="com/translator/app"
           NEW_DIR="com/rtp/app"
 
-          echo "▶ 1/4  Замена строк '$OLD_PKG' → '$NEW_PKG' в исходниках…"
-          # Только текстовые исходники; не трогаем .git, build/, бинарники.
+          echo "▶ 1/4  Замена строк '$OLD_PKG' → '$NEW_PKG'…"
           grep -rIl --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle \
             --include='*.kt'  --include='*.kts' --include='*.java' \
             --include='*.xml' --include='*.pro' --include='*.gradle' \
@@ -51,7 +39,6 @@ jobs:
             done || echo "   (совпадений не найдено)"
 
           echo "▶ 2/4  Перенос папок $OLD_DIR → $NEW_DIR…"
-          # Во всех source set (main/debug/release/test/androidTest), java и kotlin.
           for SS in app/src/*; do
             for LANG in java kotlin; do
               SRC="$SS/$LANG/$OLD_DIR"
@@ -64,7 +51,6 @@ jobs:
             done
           done
 
-          # Удаляем осиротевшую промежуточную папку com/translator, если пуста.
           for SS in app/src/*; do
             for LANG in java kotlin; do
               ORPHAN="$SS/$LANG/com/translator"
@@ -74,22 +60,20 @@ jobs:
             done
           done
 
-          echo "▶ 3/4  Проверка namespace / applicationId…"
-          # namespace и applicationId уже заменены шагом 1 (это строки com.translator.app).
-          # Если нужно ОСТАВИТЬ старый applicationId — вернём его обратно:
+          echo "▶ 3/4  applicationId…"
           if [ "${{ github.event.inputs.keep_application_id }}" = "true" ]; then
             GRADLE_FILE="$(ls app/build.gradle.kts app/build.gradle 2>/dev/null | head -n1 || true)"
             if [ -n "${GRADLE_FILE:-}" ]; then
               sed -i 's/applicationId = "com\.rtp\.app"/applicationId = "com.translator.app"/' "$GRADLE_FILE" || true
               sed -i 's/applicationId "com\.rtp\.app"/applicationId "com.translator.app"/'     "$GRADLE_FILE" || true
-              echo "   • applicationId оставлен прежним (KEEP_APP_ID)"
+              echo "   • applicationId оставлен прежним"
             fi
           fi
 
-          echo "▶ 4/4  Контроль остатков старого пакета…"
+          echo "▶ 4/4  Контроль остатков…"
           if grep -rIn --exclude-dir=.git --exclude-dir=build "$OLD_PKG" \
               --include='*.kt' --include='*.kts' --include='*.xml' . ; then
-            echo "::warning::Остались упоминания $OLD_PKG (проверь вывод выше)"
+            echo "::warning::Остались упоминания $OLD_PKG"
           else
             echo "   ✓ упоминаний $OLD_PKG не осталось"
           fi
