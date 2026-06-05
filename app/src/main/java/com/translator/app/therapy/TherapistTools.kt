@@ -16,6 +16,7 @@ object ToolName {
     const val FLAG_CONCERN      = "flag_clinical_concern"
     const val READ_JOURNAL      = "read_recent_journal"
     const val READ_PROFILE      = "read_full_profile"
+    const val READ_DIALOGUE_HISTORY = "read_dialogue_history" // Новый инструмент памяти
 }
 
 object TherapistTools {
@@ -98,8 +99,18 @@ object TherapistTools {
 
         add(decl(
             name = ToolName.READ_PROFILE,
-            description = "Прочитать полную терапевтическую карту пациента, чтобы освежить в памяти структуру его личности.",
+            description = "Перечитать полную терапевтическую карту пациента, чтобы освежить в памяти структуру его личности.",
             params = { }
+        ))
+
+        add(decl(
+            name = ToolName.READ_DIALOGUE_HISTORY,
+            description = "Прочитать дословную историю сообщений (транскрипты диалога) из прошлых сессий. " +
+                "Вызывай, если пациент ссылается на свои старые слова, если нужно проверить динамику изменений " +
+                "или детально вспомнить точный ход прошлой беседы.",
+            params = {
+                numParam("limit", "Количество последних сообщений для чтения (по умолчанию 30, максимум 100)", false)
+            }
         ))
     }
 
