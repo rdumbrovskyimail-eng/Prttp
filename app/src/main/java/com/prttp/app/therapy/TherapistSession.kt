@@ -5,6 +5,7 @@ import com.prttp.app.domain.model.JournalEntry
 import com.prttp.app.domain.model.LatencyProfile
 import com.prttp.app.domain.model.PatientProfile
 import com.prttp.app.domain.model.SessionConfig
+import com.prttp.app.therapy.TherapistSpecializations
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -69,14 +70,13 @@ object TherapistSession {
         if (p.facts.isEmpty() && p.sessionNotes.isEmpty() && p.openHomework.isEmpty() &&
             p.displayName.isBlank() && p.moodLogs.isEmpty()
         ) {
-            return "═══ ТЕРАПЕВТИЧЕСКАЯ КАРТА ПАЦИЕНТА ═══\n" +
-                "(Карта пуста. Сессия #1. Познакомься тепло, зафиксируй запрос.)"
+            return "═══ КАРТА ПАЦИЕНТА ═══\n(Карта пуста. Сессия #1. " +
+                "Познакомься тепло, зафиксируй запрос. НЕ используй «На что жалуетесь?»)"
         }
         return buildString {
-            append("═══ ТЕРАПЕВТИЧЕСКАЯ КАРТА ПАЦИЕНТА ═══\n")
+            append("═══ КАРТА ПАЦИЕНТА ═══\n")
             if (p.displayName.isNotBlank()) append("Имя: ${p.displayName}\n")
             append("Сессия: #${p.sessionCount}\n")
-
             if (p.facts.isNotEmpty()) {
                 append("\nСтруктура личности:\n")
                 p.facts.sortedByDescending { it.updatedAt }.take(45).forEach {
@@ -132,21 +132,21 @@ object TherapistSession {
         append("═══ ИНСТРУКЦИЯ ПО ОТКРЫТИЮ ЭТОЙ СЕССИИ ═══\n")
         when {
             p.sessionCount <= 1 -> {
-                append("Первая встреча. Начни тепло, без медицинского языка.\n")
+                append("Первая встреча. Тёплое знакомство, без медицинского языка.\n")
                 append("«Привет. Я рад, что ты здесь. Как ты сейчас, в эту минуту?»\n")
             }
             p.openHomework.isNotEmpty() -> {
-                append("Сессия #${p.sessionCount}. Есть невыполненные ДЗ — проверь после приветствия.\n")
+                append("Сессия #${p.sessionCount}. Есть ДЗ — проверь после приветствия.\n")
                 append("Не критикуй если не выполнено — исследуй что мешало.\n")
             }
             p.moodLogs.lastOrNull()?.score?.let { it <= 4 } == true -> {
                 append("Сессия #${p.sessionCount}. Последнее настроение ${p.moodLogs.last().score}/10.\n")
-                append("«Как ты сейчас? Прошлый раз было непросто.» Будь внимателен к кризису.\n")
+                append("«Как ты сейчас? Прошлый раз было непросто.» Следи за кризисом.\n")
             }
             else -> {
                 val name = if (p.displayName.isNotBlank()) p.displayName else "тебя"
                 append("Сессия #${p.sessionCount}. «Привет, $name. Как ты?»\n")
-                append("Дай пациенту самому задать направление встречи.\n")
+                append("Дай пациенту задать направление встречи.\n")
             }
         }
     }
