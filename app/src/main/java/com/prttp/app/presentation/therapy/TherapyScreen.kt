@@ -61,7 +61,9 @@ data class TherapyUiState(
     val crisis: CrisisLevel = CrisisLevel.None,
     val crisisReason: String = "",
     val lastCaption: String = "",
-    val activeActionStatus: String = ""
+    val activeActionStatus: String = "",
+    val therapyImage: com.prttp.app.data.TherapyImage? = null,
+    val imageLoading: Boolean = false
 )
 
 @Composable
