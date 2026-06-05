@@ -4,7 +4,7 @@ import androidx.compose.runtime.Immutable
 import kotlinx.serialization.Serializable
 
 // ─────────────────────────────────────────────────────────────────────────
-//  ПРОФИЛЬ ПАЦИЕНТА
+//  ПРОФИЛЬ ПАЦИЕНТА И СТРУКТУРНЫЕ КАТЕГОРИИ АНАЛИЗА
 // ─────────────────────────────────────────────────────────────────────────
 
 @Serializable
@@ -18,22 +18,26 @@ data class ProfileFact(
 )
 
 object ProfileCategory {
-    const val PRESENTING_CONCERN = "presenting_concern"
-    const val HISTORY            = "history"
-    const val SYMPTOM            = "symptom"
-    const val TRIGGER            = "trigger"
-    const val COGNITION          = "cognition"
-    const val COPING             = "coping"
-    const val STRENGTH           = "strength"
-    const val GOAL               = "goal"
-    const val RELATIONSHIP       = "relationship"
-    const val PREFERENCE         = "preference"
-    const val BOUNDARY           = "boundary"
-    const val MEDICAL            = "medical"
+    // Базовые клинические категории
+    const val PRESENTING_CONCERN = "presenting_concern" // С чем пришел (запрос)
+    const val HISTORY            = "history"            // Анамнез жизни и травм
+    const val SYMPTOM            = "symptom"            // Наблюдаемые симптомы и аффект
+    const val TRIGGER            = "trigger"            // Ситуативные триггеры
+
+    // Новые глубокие категории анализа структуры личности
+    const val CORE_BELIEF        = "core_belief"        // Глубинные убеждения (о себе, о людях, о мире)
+    const val COGNITIVE_STYLE    = "cognitive_style"    // Когнитивные искажения и стиль мышления
+    const val DEFENSE_MECHANISM  = "defense_mechanism"  // Психологические защиты (проекция, вытеснение, изоляция аффекта и др.)
+    const val MALADAPTIVE_SCHEMA = "maladaptive_schema" // Ранние дезадаптивные схемы по Янгу (покинутость, недоверие, дефективность и др.)
+    const val BEHAVIOR_PATTERN   = "behavior_pattern"   // Паттерны поведения (избегание, компенсация, капитуляция)
+    const val EMOTIONAL_BLOCK    = "emotional_block"    // Подавленные чувства и зоны заблокированного аффекта
+    const val COPING_STRATEGY    = "coping_strategy"    // Адаптивные ресурсы и копинг-механизмы
+    const val THERAPEUTIC_GOAL   = "therapeutic_goal"   // Цели терапии
 
     val ALL = listOf(
-        PRESENTING_CONCERN, HISTORY, SYMPTOM, TRIGGER, COGNITION, COPING,
-        STRENGTH, GOAL, RELATIONSHIP, PREFERENCE, BOUNDARY, MEDICAL
+        PRESENTING_CONCERN, HISTORY, SYMPTOM, TRIGGER, CORE_BELIEF,
+        COGNITIVE_STYLE, DEFENSE_MECHANISM, MALADAPTIVE_SCHEMA,
+        BEHAVIOR_PATTERN, EMOTIONAL_BLOCK, COPING_STRATEGY, THERAPEUTIC_GOAL
     )
 }
 
@@ -46,7 +50,6 @@ data class PatientProfile(
     val moodLogs: List<MoodLog> = emptyList(),
     val homework: List<Homework> = emptyList(),
     val flags: List<ClinicalFlag> = emptyList(),
-    // Полноценная пошаговая история сообщений
     val messages: List<ConversationMessage> = emptyList(),
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
@@ -56,10 +59,6 @@ data class PatientProfile(
     val activeRisk: ClinicalFlag?
         get() = flags.filter { it.active }.maxByOrNull { it.level.severity }
 }
-
-// ─────────────────────────────────────────────────────────────────────────
-//  ДНЕВНИК
-// ─────────────────────────────────────────────────────────────────────────
 
 @Serializable
 @Immutable
@@ -71,10 +70,6 @@ data class JournalEntry(
     val createdAt: Long = System.currentTimeMillis()
 )
 
-// ─────────────────────────────────────────────────────────────────────────
-//  ЗАМЕТКИ СЕССИЙ
-// ─────────────────────────────────────────────────────────────────────────
-
 @Serializable
 @Immutable
 data class SessionNote(
@@ -85,10 +80,6 @@ data class SessionNote(
     val createdAt: Long = System.currentTimeMillis()
 )
 
-// ─────────────────────────────────────────────────────────────────────────
-//  НАСТРОЕНИЕ
-// ─────────────────────────────────────────────────────────────────────────
-
 @Serializable
 @Immutable
 data class MoodLog(
@@ -96,10 +87,6 @@ data class MoodLog(
     val note: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )
-
-// ─────────────────────────────────────────────────────────────────────────
-//  ДОМАШНИЕ ЗАДАНИЯ
-// ─────────────────────────────────────────────────────────────────────────
 
 @Serializable
 @Immutable
@@ -112,10 +99,6 @@ data class Homework(
     val createdAt: Long = System.currentTimeMillis(),
     val doneAt: Long? = null
 )
-
-// ─────────────────────────────────────────────────────────────────────────
-//  КЛИНИЧЕСКИЕ ФЛАГИ
-// ─────────────────────────────────────────────────────────────────────────
 
 @Serializable
 enum class RiskLevel(val severity: Int) {
