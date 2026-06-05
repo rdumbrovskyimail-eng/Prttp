@@ -37,6 +37,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 
+private const val STUCK_TURN_TIMEOUT_MS = 45_000L
+private const val RESPONSE_TIMEOUT_MS   = 30_000L
+
 @HiltViewModel
 class TherapyViewModel @Inject constructor(
     @ApplicationContext private val appContext: Context,
@@ -282,6 +285,33 @@ class TherapyViewModel @Inject constructor(
             delay(RESPONSE_TIMEOUT_MS)
             if (_state.value.phase == TherapyPhase.Listening && connected && !hasModelOutputThisTurn.get()) {
                 logger.w("⚠ responseTimeout: ИИ не ответил за ${RESPONSE_TIMEOUT_MS}ms")
+                scheduleReconnect()
+            }
+        }
+    }
+
+    private fun startStuckTurnWatchdog() {
+        stuckTurnWatchdogJob?.cancel()
+        stuckTurnWatchdogJob = viewModelScope.launch {
+            delay(STUCK_TURN_TIMEOUT_MS)
+            if (_state.value.phase == TherapyPhase.AssistantSpeaking) {
+                logger.w("stuckTurnWatchdog: TurnComplete не пришёл за ${STUCK_TURN_TIMEOUT_MS}ms")
+                runCatching { audioEngine.flushPlayback() }
+                runCatching { audioEngine.onTurnComplete() }
+                hasModelOutputThisTurn.set(false)
+                lastSeenTurnId.set(Long.MIN_VALUE)
+                saveAccumulatedTurnMessages()
+                if (connected) _state.update { it.copy(phase = TherapyPhase.Listening, lastCaption = "") }
+            }
+        }
+    }
+
+    private fun startResponseTimeoutWatchdog() {
+        responseTimeoutJob?.cancel()
+        responseTimeoutJob = viewModelScope.launch {
+            delay(RESPONSE_TIMEOUT_MS)
+            if (_state.value.phase == TherapyPhase.Listening && connected && !hasModelOutputThisTurn.get()) {
+                logger.w("responseTimeout: ИИ не ответил за ${RESPONSE_TIMEOUT_MS}ms")
                 scheduleReconnect()
             }
         }
