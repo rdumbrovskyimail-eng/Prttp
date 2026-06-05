@@ -329,6 +329,12 @@ class GeminiLiveClient(
                 })
             }
 
+            config.toolsJson?.let { tools ->
+                put("tools", buildJsonArray {
+                    add(buildJsonObject { put("functionDeclarations", tools) })
+                })
+            }
+
             put("realtimeInputConfig", buildJsonObject {
                 put("automaticActivityDetection", buildJsonObject {
                     put("disabled", !config.autoActivityDetection)
