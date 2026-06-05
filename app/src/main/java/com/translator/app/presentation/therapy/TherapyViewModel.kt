@@ -14,6 +14,7 @@ import com.translator.app.data.settings.AppSettings
 import com.translator.app.domain.AudioEngine
 import com.translator.app.domain.LiveClient
 import com.translator.app.domain.model.ConversationMessage
+import com.translator.app.domain.model.FunctionCall
 import com.translator.app.domain.model.GeminiEvent
 import com.translator.app.domain.model.RiskLevel
 import com.translator.app.domain.model.SessionConfig
@@ -59,7 +60,6 @@ class TherapyViewModel @Inject constructor(
     private val hasModelOutputThisTurn = AtomicBoolean(false)
     private val networkLost = AtomicBoolean(false)
 
-    // Накопители фрагментов текущего хода
     private val accumulatedUserText = StringBuilder()
     private val accumulatedModelText = StringBuilder()
 
@@ -114,7 +114,7 @@ class TherapyViewModel @Inject constructor(
 
     fun endSession() {
         viewModelScope.launch {
-            saveAccumulatedTurnMessages() // Сохраняем неполные реплики перед завершением сессии
+            saveAccumulatedTurnMessages()
             reconnectJob?.cancel(); reconnectJob = null
             micJob?.cancel(); micJob = null
             runCatching { audioEngine.stopCapture() }
@@ -143,7 +143,6 @@ class TherapyViewModel @Inject constructor(
     }
 
     private suspend fun connect(freshSession: Boolean) = sessionMutex.withLock {
-        // Гарантируем загрузку перед чтением
         val profile = repo.getProfile()
         val journal = repo.getJournal()
         val base = TherapistSession.buildConfig(
@@ -203,6 +202,52 @@ class TherapyViewModel @Inject constructor(
         }
     }
 
+    private fun formatToolCalls(calls: List<FunctionCall>): String {
+        if (calls.isEmpty()) return ""
+        return calls.joinToString(" | ") { call ->
+            val cleanArgs = call.args.mapValues { (_, v) -> unwrapJsonString(v) }
+            when (call.name) {
+                "update_profile" -> {
+                    val cat = categoryTranslate(cleanArgs["category"] ?: "")
+                    val key = cleanArgs["key"] ?: ""
+                    "⚡ Сохранение [$cat] ➜ $key"
+                }
+                "set_patient_name" -> "⚡ Запись имени: ${cleanArgs["name"]}"
+                "save_session_note" -> "⚡ Архивация: запись итогов встречи"
+                "log_mood" -> "⚡ Фиксация настроения: ${cleanArgs["score"]}/10"
+                "add_homework" -> "⚡ Назначение ДЗ: ${cleanArgs["title"]}"
+                "complete_homework" -> "⚡ Выполнение ДЗ (ID: ${cleanArgs["id"]})"
+                "flag_clinical_concern" -> "⚠ Контроль рисков: флаг [${cleanArgs["level"]?.uppercase()}]"
+                "read_recent_journal" -> "⚡ Чтение дневника за ${cleanArgs["days"] ?: "14"} дн."
+                "read_full_profile" -> "⚡ Анализ всей терапевтической карты"
+                else -> "⚡ Вызов: ${call.name}"
+            }
+        }
+    }
+
+    private fun unwrapJsonString(raw: String): String {
+        val t = raw.trim()
+        return if (t.length >= 2 && t.startsWith("\"") && t.endsWith("\"")) {
+            t.substring(1, t.length - 1).replace("\\\"", "\"").replace("\\n", "\n")
+        } else t
+    }
+
+    private fun categoryTranslate(cat: String): String = when (cat.lowercase().trim()) {
+        "presenting_concern" -> "Запрос"
+        "history" -> "Анамнез"
+        "symptom" -> "Симптом"
+        "trigger" -> "Триггер"
+        "core_belief" -> "Убеждение"
+        "cognitive_style" -> "Искажение"
+        "defense_mechanism" -> "Защита"
+        "maladaptive_schema" -> "Схема"
+        "behavior_pattern" -> "Паттерн"
+        "emotional_block" -> "Аффект"
+        "coping_strategy" -> "Копинг"
+        "therapeutic_goal" -> "Цель"
+        else -> cat
+    }
+
     private fun observeEvents() {
         viewModelScope.launch {
             liveClient.events.collect { event ->
@@ -237,8 +282,16 @@ class TherapyViewModel @Inject constructor(
 
                     is GeminiEvent.ToolCall -> {
                         viewModelScope.launch {
+                            // Формируем и выводим статус операции ИИ на экран
+                            val statusText = formatToolCalls(event.calls)
+                            _state.update { it.copy(activeActionStatus = statusText) }
+
                             val responses = toolHandler.handle(event.calls)
                             liveClient.sendToolResponse(responses)
+
+                            // Показываем капсулу завершенной операции еще 3.5 секунды, затем скрываем
+                            delay(3500)
+                            _state.update { it.copy(activeActionStatus = "") }
                         }
                     }
 
@@ -250,7 +303,7 @@ class TherapyViewModel @Inject constructor(
                         lastSeenTurnId.set(Long.MIN_VALUE)
                         if (connected) _state.update { it.copy(phase = TherapyPhase.Listening) }
                         
-                        saveAccumulatedTurnMessages() // Сохраняем диалог при перебивании
+                        saveAccumulatedTurnMessages()
                     }
 
                     is GeminiEvent.TurnComplete -> {
@@ -259,7 +312,7 @@ class TherapyViewModel @Inject constructor(
                         lastSeenTurnId.set(Long.MIN_VALUE)
                         if (connected) _state.update { it.copy(phase = TherapyPhase.Listening) }
                         
-                        saveAccumulatedTurnMessages() // Сохраняем реплики в базу при штатном завершении хода
+                        saveAccumulatedTurnMessages()
                     }
 
                     is GeminiEvent.GoAway -> scheduleReconnect()
