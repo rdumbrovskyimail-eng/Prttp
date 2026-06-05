@@ -1,92 +1,111 @@
-name: Rename Package translator → rtp
+name: Rename Package translator to rtp
 
 on:
   workflow_dispatch:
     inputs:
-      keep_application_id:
-        description: "Оставить applicationId = com.translator.app (true/false)"
+      dry_run:
+        description: 'Dry run (preview without committing)'
         required: false
-        default: "false"
-
-permissions:
-  contents: write
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      target_branch:
+        description: 'Branch to apply changes to'
+        required: false
+        default: 'main'
 
 jobs:
   rename:
-    runs-on: ubuntu-24.04
+    name: Rename translator to rtp
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.target_branch }}
+          fetch-depth: 0
 
-      - name: Rename package com.translator.app → com.rtp.app
+      - name: Configure Git
         run: |
-          set -euo pipefail
-
-          OLD_PKG="com.translator.app"
-          NEW_PKG="com.rtp.app"
-          OLD_DIR="com/translator/app"
-          NEW_DIR="com/rtp/app"
-
-          echo "▶ 1/4  Замена строк '$OLD_PKG' → '$NEW_PKG'…"
-          grep -rIl --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle \
-            --include='*.kt'  --include='*.kts' --include='*.java' \
-            --include='*.xml' --include='*.pro' --include='*.gradle' \
-            --include='*.json' --include='*.txt' \
-            "$OLD_PKG" . | while read -r f; do
-              sed -i "s/${OLD_PKG//./\\.}/${NEW_PKG//./\\.}/g" "$f"
-              echo "   • $f"
-            done || echo "   (совпадений не найдено)"
-
-          echo "▶ 2/4  Перенос папок $OLD_DIR → $NEW_DIR…"
-          for SS in app/src/*; do
-            for LANG in java kotlin; do
-              SRC="$SS/$LANG/$OLD_DIR"
-              if [ -d "$SRC" ]; then
-                DST="$SS/$LANG/$NEW_DIR"
-                mkdir -p "$(dirname "$DST")"
-                git mv "$SRC" "$DST"
-                echo "   • $SRC → $DST"
-              fi
-            done
-          done
-
-          for SS in app/src/*; do
-            for LANG in java kotlin; do
-              ORPHAN="$SS/$LANG/com/translator"
-              if [ -d "$ORPHAN" ] && [ -z "$(ls -A "$ORPHAN")" ]; then
-                rmdir "$ORPHAN" && echo "   • удалена пустая $ORPHAN"
-              fi
-            done
-          done
-
-          echo "▶ 3/4  applicationId…"
-          if [ "${{ github.event.inputs.keep_application_id }}" = "true" ]; then
-            GRADLE_FILE="$(ls app/build.gradle.kts app/build.gradle 2>/dev/null | head -n1 || true)"
-            if [ -n "${GRADLE_FILE:-}" ]; then
-              sed -i 's/applicationId = "com\.rtp\.app"/applicationId = "com.translator.app"/' "$GRADLE_FILE" || true
-              sed -i 's/applicationId "com\.rtp\.app"/applicationId "com.translator.app"/'     "$GRADLE_FILE" || true
-              echo "   • applicationId оставлен прежним"
-            fi
-          fi
-
-          echo "▶ 4/4  Контроль остатков…"
-          if grep -rIn --exclude-dir=.git --exclude-dir=build "$OLD_PKG" \
-              --include='*.kt' --include='*.kts' --include='*.xml' . ; then
-            echo "::warning::Остались упоминания $OLD_PKG"
-          else
-            echo "   ✓ упоминаний $OLD_PKG не осталось"
-          fi
-
-      - name: Commit & push
-        run: |
-          set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet && git diff --cached --quiet; then
-            echo "Нет изменений — пакет уже переименован."
-            exit 0
-          fi
+
+      - name: Preview affected files
+        run: |
+          echo "=== Files containing 'com.translator.app' ==="
+          grep -rl 'com.translator.app' . \
+            --exclude-dir='.git' \
+            --exclude-dir='.github' \
+            --exclude-dir='build' \
+            --exclude-dir='.gradle' \
+            --exclude-dir='.idea' \
+            || echo "(none found)"
+          echo ""
+          echo "=== Paths containing 'translator' ==="
+          find . \
+            -not -path './.git/*' \
+            -not -path './.github/*' \
+            -not -path './build/*' \
+            -not -path './.gradle/*' \
+            -path '*com/translator*' \
+            || echo "(none found)"
+
+      - name: Replace package in file contents
+        if: github.event.inputs.dry_run == 'false'
+        run: |
+          grep -rl 'com.translator.app' . \
+            --exclude-dir='.git' \
+            --exclude-dir='.github' \
+            --exclude-dir='build' \
+            --exclude-dir='.gradle' \
+            --exclude-dir='.idea' \
+            --include='*.kt' \
+            --include='*.java' \
+            --include='*.xml' \
+            --include='*.gradle' \
+            --include='*.kts' \
+            --include='*.json' \
+            --include='*.pro' \
+            --include='*.properties' \
+          | xargs -I{} sed -i 's/com\.translator\.app/com.rtp.app/g' {}
+          echo "File contents updated."
+
+      - name: Rename directory com/translator to com/rtp
+        if: github.event.inputs.dry_run == 'false'
+        run: |
+          find . -depth \
+            -not -path './.git/*' \
+            -not -path './build/*' \
+            -not -path './.gradle/*' \
+            -type d \
+            -path '*com/translator' \
+          | while IFS= read -r dir; do
+              new_dir="${dir//com\/translator/com\/rtp}"
+              echo "Moving: $dir -> $new_dir"
+              mkdir -p "$(dirname "$new_dir")"
+              mv "$dir" "$new_dir"
+            done
+          echo "Directories renamed."
+
+      - name: Commit and push changes
+        if: github.event.inputs.dry_run == 'false'
+        run: |
           git add -A
-          git commit -m "chore: rename package com.translator.app → com.rtp.app"
-          git push
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -m "refactor: rename package com.translator.app to com.rtp.app"
+            git push origin ${{ github.event.inputs.target_branch }}
+            echo "Pushed to ${{ github.event.inputs.target_branch }}."
+          fi
+
+      - name: Dry run summary
+        if: github.event.inputs.dry_run == 'true'
+        run: |
+          echo "DRY RUN complete — no changes made."
+          echo "Set dry_run = false to apply."
