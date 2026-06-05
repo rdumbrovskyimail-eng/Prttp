@@ -7,7 +7,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -30,8 +32,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import coil.compose.AsyncImage
 import com.prttp.app.data.TherapyImage
+import com.prttp.app.therapy.ImageTheme
 
 /**
  * Визуальный оверлей терапевтического изображения.
@@ -42,6 +47,8 @@ import com.prttp.app.data.TherapyImage
 fun TherapyImageOverlay(
     image: TherapyImage?,
     isLoading: Boolean,
+    currentTheme: ImageTheme,
+    onThemeChange: (ImageTheme) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -125,6 +132,39 @@ fun TherapyImageOverlay(
                             .fillMaxWidth()
                             .padding(bottom = 10.dp)
                     )
+
+                    // ── Выбор темы ──
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(ImageTheme.values()) { theme ->
+                            val selected = theme == currentTheme
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(
+                                        if (selected) Color(0x446FE3C9) else Color(0x1A6FE3C9)
+                                    )
+                                    .border(
+                                        width = if (selected) 1.dp else 0.dp,
+                                        color = if (selected) Color(0xFF6FE3C9) else Color.Transparent,
+                                        shape = RoundedCornerShape(20.dp)
+                                    )
+                                    .clickable { onThemeChange(theme) }
+                                    .padding(horizontal = 10.dp, vertical = 5.dp)
+                            ) {
+                                Text(
+                                    text = "${theme.emoji} ${theme.label}",
+                                    color = if (selected) Color(0xFF6FE3C9) else Color(0x99CFE3E0),
+                                    fontSize = 11.sp,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
