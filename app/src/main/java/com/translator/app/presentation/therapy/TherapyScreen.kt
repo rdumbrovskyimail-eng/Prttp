@@ -1,28 +1,15 @@
-// Путь: app/src/main/java/com/translator/app/presentation/therapy/TherapyScreen.kt
-//
-// Флагманский экран сессии пси-ассистента. Спроектирован под человека, которому
-// может быть тяжело: максимально спокойный, без визуального шума, крупные мягкие
-// формы, один смысловой центр на экране.
-//
-// Состоянием и действиями управляет TherapyViewModel; экран — «глупый»
-// (stateless), принимает TherapyUiState + лямбды. Это делает его тестируемым и
-// независимым от внутренностей, которые ещё пишутся.
-//
-// «Живая точка присутствия» (дышащий круг) отражает фазу разговора. Сюда же
-// легко подключить существующий ObsidianOrb из проекта — место отмечено.
-// ═══════════════════════════════════════════════════════════════════════════
 package com.translator.app.presentation.therapy
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -70,8 +58,9 @@ data class TherapyUiState(
     val micMuted: Boolean = false,
     val crisis: CrisisLevel = CrisisLevel.None,
     val crisisReason: String = "",
-    /** Последняя реплика ассистента — субтитром, мелко (опц. для доступности). */
-    val lastCaption: String = ""
+    val lastCaption: String = "",
+    // Текущий статус операции ИИ в реальном времени (поле должно присутствовать здесь)
+    val activeActionStatus: String = ""
 )
 
 @Composable
@@ -82,7 +71,6 @@ fun TherapyScreen(
     onOpenResources: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Спокойный тёмно-сине-зелёный градиент — низкая стимуляция.
     val bg = Brush.verticalGradient(
         listOf(Color(0xFF0E1A24), Color(0xFF132A2E), Color(0xFF0E1A24))
     )
@@ -92,7 +80,7 @@ fun TherapyScreen(
             .fillMaxSize()
             .background(bg)
     ) {
-        // ── Кризисный баннер: всплывает сверху, мягко, без агрессии ──
+        // ── Кризисный баннер ──
         AnimatedVisibility(
             visible = state.crisis == CrisisLevel.Elevated,
             enter = slideInVertically { -it } + fadeIn(),
@@ -132,6 +120,18 @@ fun TherapyScreen(
             }
         }
 
+        // ── Монитор телеметрии ИИ ──
+        AnimatedVisibility(
+            visible = state.activeActionStatus.isNotBlank(),
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 124.dp, start = 24.dp, end = 24.dp)
+        ) {
+            ActionStatusCapsule(status = state.activeActionStatus)
+        }
+
         // ── Низ: микрофон + завершить ──
         Row(
             modifier = Modifier
@@ -159,9 +159,27 @@ fun TherapyScreen(
 }
 
 @Composable
+private fun ActionStatusCapsule(status: String) {
+    Box(
+        modifier = Modifier
+            .background(Color(0xE60E181D), RoundedCornerShape(12.dp))
+            .border(1.dp, Color(0xFF40E0C0).copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+    ) {
+        Text(
+            text = status,
+            color = Color(0xFF6FE3C9),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
 private fun PresenceOrb(phase: TherapyPhase) {
     val transition = rememberInfiniteTransition(label = "breath")
-    // Скорость «дыхания» зависит от фазы — медленнее в покое, активнее в речи.
     val durationMs = when (phase) {
         TherapyPhase.AssistantSpeaking -> 1400
         TherapyPhase.Listening -> 2600
@@ -175,7 +193,6 @@ private fun PresenceOrb(phase: TherapyPhase) {
         label = "scale"
     )
 
-    // ЗАМЕНА: сюда можно вставить существующий ObsidianOrb из проекта.
     Box(
         modifier = Modifier
             .size(170.dp)
