@@ -51,7 +51,7 @@ fun TherapyMainScreen(
                             0 -> "Пси-Сессия"
                             1 -> "Дневник мыслей"
                             2 -> "Профиль пациента"
-                            else -> "Специализации"
+                            else -> "Направления"
                         },
                         fontWeight = FontWeight.Bold,
                         color = palette.textPrimary
