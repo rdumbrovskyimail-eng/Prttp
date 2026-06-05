@@ -7,16 +7,17 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 object ToolName {
-    const val UPDATE_PROFILE   = "update_profile"
-    const val SET_NAME         = "set_patient_name"
-    const val SAVE_SESSION_NOTE = "save_session_note"
-    const val LOG_MOOD         = "log_mood"
-    const val ADD_HOMEWORK      = "add_homework"
-    const val COMPLETE_HOMEWORK = "complete_homework"
-    const val FLAG_CONCERN      = "flag_clinical_concern"
-    const val READ_JOURNAL      = "read_recent_journal"
-    const val READ_PROFILE      = "read_full_profile"
-    const val READ_DIALOGUE_HISTORY = "read_dialogue_history" // Новый инструмент памяти
+    const val UPDATE_PROFILE        = "update_profile"
+    const val SET_NAME              = "set_patient_name"
+    const val SAVE_SESSION_NOTE     = "save_session_note"
+    const val LOG_MOOD              = "log_mood"
+    const val ADD_HOMEWORK          = "add_homework"
+    const val COMPLETE_HOMEWORK     = "complete_homework"
+    const val FLAG_CONCERN          = "flag_clinical_concern"
+    const val READ_JOURNAL          = "read_recent_journal"
+    const val READ_PROFILE          = "read_full_profile"
+    const val READ_DIALOGUE_HISTORY = "read_dialogue_history"
+    const val SHOW_IMAGE            = "show_therapeutic_image"
 }
 
 object TherapistTools {
@@ -112,6 +113,31 @@ object TherapistTools {
                 numParam("limit", "Количество последних сообщений для чтения (по умолчанию 30, максимум 100)", false)
             }
         ))
+
+        add(buildJsonObject {
+            put("name", ToolName.SHOW_IMAGE)
+            put("description", "Показать пациенту терапевтическое изображение. " +
+                "Вызывай когда используешь технику заземления, визуализации безопасного места, " +
+                "дыхательных упражнений или позитивного образа. " +
+                "НЕ вызывай при работе с травмой, во время плача или кризиса.")
+            put("parameters", buildJsonObject {
+                put("type", "object")
+                put("properties", buildJsonObject {
+                    put("query", buildJsonObject {
+                        put("type", "string")
+                        put("description", "Поисковый запрос на английском для Pexels. " +
+                            "Примеры: 'calm ocean waves', 'misty forest peaceful', " +
+                            "'warm sunlight meadow', 'cozy reading nook', 'mountain sunrise'")
+                    })
+                    put("caption", buildJsonObject {
+                        put("type", "string")
+                        put("description", "Краткая подпись на русском (1-2 слова) для пациента. " +
+                            "Примеры: 'Представь это место', 'Здесь безопасно', 'Дыши вместе с волнами'")
+                    })
+                })
+                put("required", buildJsonArray { add("query"); add("caption") })
+            })
+        })
     }
 
     private inline fun decl(
