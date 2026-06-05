@@ -56,17 +56,18 @@ enum class CrisisLevel { None, Elevated }
 data class TherapyUiState(
     val phase: TherapyPhase = TherapyPhase.Idle,
     val patientName: String = "",
+    val sessionCount: Int = 0,
     val micMuted: Boolean = false,
     val crisis: CrisisLevel = CrisisLevel.None,
     val crisisReason: String = "",
     val lastCaption: String = "",
-    // Текущий статус операции ИИ в реальном времени
     val activeActionStatus: String = ""
 )
 
 @Composable
 fun TherapyScreen(
     state: TherapyUiState,
+    onStartSession: () -> Unit,
     onToggleMute: () -> Unit,
     onEndSession: () -> Unit,
     onOpenResources: () -> Unit,
@@ -91,7 +92,20 @@ fun TherapyScreen(
             CrisisBanner(reason = state.crisisReason, onOpenResources = onOpenResources)
         }
 
-        // ── Центр: фаза + дышащая точка присутствия ──
+        // ── Номер сессии (верхний правый угол) ──
+        if (state.phase != TherapyPhase.Idle && state.sessionCount > 0) {
+            Text(
+                text = "Сессия #${state.sessionCount}",
+                color = Color(0x776FE3C9),
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 16.dp, end = 20.dp)
+            )
+        }
+
+        // ── Центр ──
         Column(
             modifier = Modifier
                 .align(Alignment.Center)
@@ -103,7 +117,7 @@ fun TherapyScreen(
             Spacer(Modifier.height(28.dp))
 
             Text(
-                text = phaseLabel(state.phase, state.patientName),
+                text = phaseLabel(state.phase, state.patientName, state.sessionCount),
                 color = Color(0xFFCFE3E0),
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Medium,
@@ -119,9 +133,28 @@ fun TherapyScreen(
                     textAlign = TextAlign.Center
                 )
             }
+
+            Spacer(Modifier.height(48.dp))
+
+            if (state.phase == TherapyPhase.Idle) {
+                Button(
+                    onClick = onStartSession,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7E78)),
+                    shape = RoundedCornerShape(28.dp),
+                    modifier = Modifier.fillMaxWidth(0.75f).height(56.dp)
+                ) {
+                    Text(
+                        text = if (state.sessionCount == 0) "Начать первую встречу"
+                               else "Начать встречу #${state.sessionCount + 1}",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
         }
 
-        // ── Монитор телеметрии ИИ ──
+        // ── Монитор телеметрии ──
         AnimatedVisibility(
             visible = state.activeActionStatus.isNotBlank(),
             enter = fadeIn() + slideInVertically { it },
@@ -133,27 +166,23 @@ fun TherapyScreen(
             ActionStatusCapsule(status = state.activeActionStatus)
         }
 
-        // ── Низ: микрофон + завершить ──
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(bottom = 48.dp, start = 40.dp, end = 40.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            RoundControl(
-                muted = state.micMuted,
-                onClick = onToggleMute
-            )
-
-            IconButton(
-                onClick = onEndSession,
+        // ── Низ: управление (только когда активно) ──
+        if (state.phase != TherapyPhase.Idle) {
+            Row(
                 modifier = Modifier
-                    .size(56.dp)
-                    .background(Color(0x22FFFFFF), CircleShape)
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(bottom = 48.dp, start = 40.dp, end = 40.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Filled.Close, contentDescription = "Завершить", tint = Color(0xFFCFE3E0))
+                RoundControl(muted = state.micMuted, onClick = onToggleMute)
+                IconButton(
+                    onClick = onEndSession,
+                    modifier = Modifier.size(56.dp).background(Color(0x22FFFFFF), CircleShape)
+                ) {
+                    Icon(Icons.Filled.Close, contentDescription = "Завершить", tint = Color(0xFFCFE3E0))
+                }
             }
         }
     }
@@ -250,13 +279,14 @@ private fun CrisisBanner(reason: String, onOpenResources: () -> Unit) {
     }
 }
 
-private fun phaseLabel(phase: TherapyPhase, name: String): String {
+private fun phaseLabel(phase: TherapyPhase, name: String, sessionCount: Int): String {
     val who = if (name.isNotBlank()) ", $name" else ""
     return when (phase) {
-        TherapyPhase.Idle -> "Я рядом$who. Можешь начать, когда будешь готов."
+        TherapyPhase.Idle -> if (sessionCount == 0) "Добро пожаловать.\nНажми, чтобы начать."
+                             else "Рад видеть снова$who.\nНажми, чтобы начать."
         TherapyPhase.Connecting -> "Подключаюсь…"
         TherapyPhase.Reconnecting -> "Восстанавливаю связь…"
-        TherapyPhase.Listening -> "Слушаю тебя."
+        TherapyPhase.Listening -> "Здесь и слушаю."
         TherapyPhase.AssistantSpeaking -> "…"
     }
 }
