@@ -12,9 +12,9 @@
 -keepclasseswithmembers class kotlinx.serialization.json.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
--keep,includedescriptorclasses class com.translator.app.data.settings.**$$serializer { *; }
--keepclassmembers class com.translator.app.data.settings.** { *** Companion; }
--keepclasseswithmembers class com.translator.app.data.settings.** {
+-keep,includedescriptorclasses class com.prttp.app.data.settings.**$$serializer { *; }
+-keepclassmembers class com.prttp.app.data.settings.** { *** Companion; }
+-keepclasseswithmembers class com.prttp.app.data.settings.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
 -keep @kotlinx.serialization.Serializable class *

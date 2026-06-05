@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.translator.app"
+    namespace = "com.prttp.app"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.translator.app"
+        applicationId = "com.prttp.app"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
