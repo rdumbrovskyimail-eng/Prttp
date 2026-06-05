@@ -1,261 +1,168 @@
 package com.translator.app.presentation.therapy
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Surface
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.translator.app.data.PatientRepository
+import com.translator.app.domain.model.PatientProfile
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.launch
+import javax.inject.Inject
 
-/** Фазы разговора для индикатора присутствия. */
-enum class TherapyPhase { Idle, Connecting, Listening, AssistantSpeaking, Reconnecting }
-
-/** Уровень риска для баннера (зеркало RiskLevel в domain). */
-enum class CrisisLevel { None, Elevated }
-
-data class TherapyUiState(
-    val phase: TherapyPhase = TherapyPhase.Idle,
-    val patientName: String = "",
-    val micMuted: Boolean = false,
-    val crisis: CrisisLevel = CrisisLevel.None,
-    val crisisReason: String = "",
-    val lastCaption: String = "",
-    // Текущий статус операции ИИ в реальном времени
-    val activeActionStatus: String = ""
-)
+@HiltViewModel
+class ProfileViewModel @Inject constructor(
+    private val repo: PatientRepository
+) : ViewModel() {
+    val profile = repo.profile
+    fun completeHomework(id: String) { viewModelScope.launch { repo.completeHomework(id) } }
+    fun wipe() { viewModelScope.launch { repo.wipeEverything() } }
+}
 
 @Composable
-fun TherapyScreen(
-    state: TherapyUiState,
-    onToggleMute: () -> Unit,
-    onEndSession: () -> Unit,
-    onOpenResources: () -> Unit,
-    modifier: Modifier = Modifier
+fun ProfileScreen(
+    viewModel: ProfileViewModel = hiltViewModel()
 ) {
-    val bg = Brush.verticalGradient(
-        listOf(Color(0xFF0E1A24), Color(0xFF132A2E), Color(0xFF0E1A24))
-    )
+    val p by viewModel.profile.collectAsStateWithLifecycle()
+    var confirmWipe by remember { mutableStateOf(false) }
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(bg)
+    LazyColumn(
+        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // ── Кризисный баннер ──
-        AnimatedVisibility(
-            visible = state.crisis == CrisisLevel.Elevated,
-            enter = slideInVertically { -it } + fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.align(Alignment.TopCenter)
-        ) {
-            CrisisBanner(reason = state.crisisReason, onOpenResources = onOpenResources)
-        }
-
-        // ── Центр: фаза + дышащая точка присутствия ──
-        Column(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .padding(horizontal = 32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            PresenceOrb(phase = state.phase)
-
-            Spacer(Modifier.height(28.dp))
-
+        item {
             Text(
-                text = phaseLabel(state.phase, state.patientName),
-                color = Color(0xFFCFE3E0),
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Medium,
-                textAlign = TextAlign.Center
+                if (p.displayName.isNotBlank()) p.displayName else "Карточка пациента",
+                fontSize = 24.sp, fontWeight = FontWeight.Bold
             )
+        }
 
-            if (state.lastCaption.isNotBlank()) {
-                Spacer(Modifier.height(14.dp))
-                Text(
-                    text = state.lastCaption,
-                    color = Color(0x99CFE3E0),
-                    fontSize = 14.sp,
-                    textAlign = TextAlign.Center
-                )
+        // Активный риск — заметным блоком
+        p.activeRisk?.let { flag ->
+            item {
+                Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text("⚠ Внимание: ${flag.level}", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
+                        Text(flag.reason)
+                    }
+                }
             }
         }
 
-        // ── Монитор телеметрии ИИ (появляется снизу над кнопками) ──
-        AnimatedVisibility(
-            visible = state.activeActionStatus.isNotBlank(),
-            enter = fadeIn() + slideInVertically { it },
-            exit = fadeOut(),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 124.dp, start = 24.dp, end = 24.dp)
-        ) {
-            ActionStatusCapsule(status = state.activeActionStatus)
-        }
-
-        // ── Низ: микрофон + завершить ──
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(bottom = 48.dp, start = 40.dp, end = 40.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            RoundControl(
-                muted = state.micMuted,
-                onClick = onToggleMute
-            )
-
-            IconButton(
-                onClick = onEndSession,
-                modifier = Modifier
-                    .size(56.dp)
-                    .background(Color(0x22FFFFFF), CircleShape)
-            ) {
-                Icon(Icons.Filled.Close, contentDescription = "Завершить", tint = Color(0xFFCFE3E0))
+        // Динамика настроения (последние замеры)
+        if (p.moodLogs.isNotEmpty()) {
+            item {
+                Section("Настроение") {
+                    val last = p.moodLogs.takeLast(14)
+                    Text(last.joinToString("  ") { "${it.score}" }, fontWeight = FontWeight.Medium)
+                    Text("последние ${last.size} замеров (1–10)", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                }
             }
         }
+
+        // Открытые ДЗ
+        if (p.openHomework.isNotEmpty()) {
+            item {
+                Section("Домашние задания") {
+                    p.openHomework.forEach { hw ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Column(Modifier.padding(end = 8.dp)) {
+                                Text(hw.title, fontWeight = FontWeight.Medium)
+                                if (hw.detail.isNotBlank()) Text(hw.detail, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            TextButton(onClick = { viewModel.completeHomework(hw.id) }) { Text("Готово") }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Факты по категориям структуры личности
+        val grouped = p.facts.groupBy { it.category }
+        grouped.forEach { (cat, facts) ->
+            item {
+                Section(categoryLabel(cat)) {
+                    facts.sortedByDescending { it.updatedAt }.forEach {
+                        Text("• ${it.key}: ${it.value}")
+                    }
+                }
+            }
+        }
+
+        // Итоги встреч
+        if (p.sessionNotes.isNotEmpty()) {
+            item {
+                Section("Итоги встреч") {
+                    p.sessionNotes.takeLast(8).reversed().forEach {
+                        Text("• ${it.summary}", fontWeight = FontWeight.Medium)
+                        if (it.techniques.isNotEmpty()) Text("  методы: ${it.techniques.joinToString(", ")}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(6.dp))
+                    }
+                }
+            }
+        }
+
+        item { Spacer(Modifier.height(8.dp)) }
+        item { TextButton(onClick = { confirmWipe = true }) { Text("Стереть все данные", color = MaterialTheme.colorScheme.error) } }
     }
-}
 
-@Composable
-private fun ActionStatusCapsule(status: String) {
-    Box(
-        modifier = Modifier
-            .background(Color(0xE60E181D), RoundedCornerShape(12.dp))
-            .border(1.dp, Color(0xFF40E0C0).copy(alpha = 0.35f), RoundedCornerShape(12.dp))
-            .padding(horizontal = 16.dp, vertical = 10.dp)
-    ) {
-        Text(
-            text = status,
-            color = Color(0xFF6FE3C9),
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
-            textAlign = TextAlign.Center
+    if (confirmWipe) {
+        AlertDialog(
+            onDismissRequest = { confirmWipe = false },
+            title = { Text("Стереть всё?") },
+            text = { Text("Профиль, заметки и дневник будут удалены безвозвратно.") },
+            confirmButton = { TextButton(onClick = { viewModel.wipe(); confirmWipe = false }) { Text("Стереть", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { confirmWipe = false }) { Text("Отмена") } }
         )
     }
 }
 
 @Composable
-private fun PresenceOrb(phase: TherapyPhase) {
-    val transition = rememberInfiniteTransition(label = "breath")
-    val durationMs = when (phase) {
-        TherapyPhase.AssistantSpeaking -> 1400
-        TherapyPhase.Listening -> 2600
-        TherapyPhase.Connecting, TherapyPhase.Reconnecting -> 900
-        TherapyPhase.Idle -> 4000
-    }
-    val scale by transition.animateFloat(
-        initialValue = 0.92f,
-        targetValue = 1.08f,
-        animationSpec = infiniteRepeatable(tween(durationMs), RepeatMode.Reverse),
-        label = "scale"
-    )
-
-    Box(
-        modifier = Modifier
-            .size(170.dp)
-            .scale(scale)
-            .background(
-                Brush.radialGradient(
-                    listOf(Color(0xFF6FE3C9), Color(0xFF2E7E78), Color(0x0011302E))
-                ),
-                CircleShape
-            )
-    )
-}
-
-@Composable
-private fun RoundControl(muted: Boolean, onClick: () -> Unit) {
-    IconButton(
-        onClick = onClick,
-        modifier = Modifier
-            .size(56.dp)
-            .background(if (muted) Color(0x33FF6B6B) else Color(0x2240E0C0), CircleShape)
-    ) {
-        Icon(
-            imageVector = if (muted) Icons.Filled.MicOff else Icons.Filled.Mic,
-            contentDescription = if (muted) "Включить микрофон" else "Выключить микрофон",
-            tint = Color(0xFFCFE3E0)
-        )
-    }
-}
-
-@Composable
-private fun CrisisBanner(reason: String, onOpenResources: () -> Unit) {
-    Surface(
-        color = Color(0xFF2A1B1B),
-        shape = RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(Modifier.padding(20.dp)) {
-            Text(
-                "Если тебе сейчас тяжело — ты не один.",
-                color = Color(0xFFFFD9D9), fontSize = 15.sp, fontWeight = FontWeight.SemiBold
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Рядом есть живая помощь, и к ней можно обратиться прямо сейчас.",
-                color = Color(0xCCFFD9D9), fontSize = 13.sp
-            )
-            Spacer(Modifier.height(14.dp))
-            Button(
-                onClick = onOpenResources,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE05B5B)),
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Показать контакты помощи", color = Color.White) }
+private fun Section(title: String, content: @Composable () -> Unit) {
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+        Column(Modifier.padding(14.dp)) {
+            Text(title, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(8.dp))
+            content()
         }
     }
 }
 
-private fun phaseLabel(phase: TherapyPhase, name: String): String {
-    val who = if (name.isNotBlank()) ", $name" else ""
-    return when (phase) {
-        TherapyPhase.Idle -> "Я рядом$who. Можешь начать, когда будешь готов."
-        TherapyPhase.Connecting -> "Подключаюсь…"
-        TherapyPhase.Reconnecting -> "Восстанавливаю связь…"
-        TherapyPhase.Listening -> "Слушаю тебя."
-        TherapyPhase.AssistantSpeaking -> "…"
-    }
+private fun categoryLabel(cat: String) = when (cat) {
+    "presenting_concern" -> "С чем обратился"
+    "history" -> "Анамнез"
+    "symptom" -> "Симптомы"
+    "trigger" -> "Триггеры"
+    "core_belief" -> "Убеждение"
+    "cognitive_style" -> "Искажение"
+    "defense_mechanism" -> "Защита"
+    "maladaptive_schema" -> "Схема"
+    "behavior_pattern" -> "Паттерн"
+    "emotional_block" -> "Аффект"
+    "coping_strategy" -> "Копинг"
+    "therapeutic_goal" -> "Цель"
+    else -> cat
 }
