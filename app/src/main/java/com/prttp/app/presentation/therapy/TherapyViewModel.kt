@@ -20,6 +20,7 @@ import com.prttp.app.domain.model.FunctionCall
 import com.prttp.app.domain.model.GeminiEvent
 import com.prttp.app.domain.model.RiskLevel
 import com.prttp.app.domain.model.SessionConfig
+import com.prttp.app.therapy.ImageTheme
 import com.prttp.app.therapy.TherapistSession
 import com.prttp.app.therapy.TherapistToolHandler
 import com.prttp.app.util.AppLogger
@@ -159,6 +160,15 @@ class TherapyViewModel @Inject constructor(
 
     fun dismissCrisisBanner() {
         _state.update { it.copy(crisis = CrisisLevel.None) }
+    }
+
+    fun switchImageTheme(theme: ImageTheme) {
+        viewModelScope.launch {
+            repo.setImageTheme(theme)
+            _state.update { it.copy(currentImageTheme = theme) }
+            val current = _state.value.therapyImage ?: return@launch
+            loadTherapyImage(current.query, current.caption)
+        }
     }
 
     fun onMicPermissionGranted() {
@@ -433,13 +443,15 @@ class TherapyViewModel @Inject constructor(
 
             _state.update { it.copy(imageLoading = true) }
 
+            val theme = repo.getImageTheme()
             val image = pexels.fetchImage(
                 apiKey  = settings.pexelsApiKey,
                 query   = query,
-                caption = caption
+                caption = caption,
+                theme   = theme
             )
 
-            _state.update { it.copy(therapyImage = image, imageLoading = false) }
+            _state.update { it.copy(therapyImage = image, imageLoading = false, currentImageTheme = theme) }
 
             if (image != null) {
                 // Авто-сброс через 40 секунд
