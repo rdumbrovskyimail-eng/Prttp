@@ -11,7 +11,6 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -37,17 +36,17 @@ fun TherapyRoute(
         }
     }
 
-    // При входе на экран — стартуем сессию (запросив микрофон при необходимости).
-    LaunchedEffect(Unit) {
-        val granted = ContextCompat.checkSelfPermission(
+    val onStartSession = {
+        val hasMic = ContextCompat.checkSelfPermission(
             context, Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
-        if (granted) viewModel.startSession()
+        if (hasMic) viewModel.startSession()
         else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
 
     TherapyScreen(
         state = state,
+        onStartSession = onStartSession,
         onToggleMute = viewModel::toggleMute,
         onEndSession = viewModel::endSession,
         onOpenResources = onOpenResources,
