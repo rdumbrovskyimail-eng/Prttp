@@ -54,41 +54,44 @@ object TherapistSession {
     ): String = buildString {
         append(TherapistClinicalCore.PROMPT)
         append("\n\n")
+        append(TherapistSpecializations.toPromptBlock())
+        append("\n\n")
         append(renderProfile(profile))
         append("\n\n")
-        // Подмешиваем последние 15 реплик предыдущей встречи в промпт для бесшовного продолжения
-        append(renderRecentMessages(profile.messages))
+        append(renderPreviousSessionMessages(profile))
         append("\n\n")
         append(renderJournal(recentJournal))
+        append("\n\n")
+        append(renderOpeningInstruction(profile))
     }
 
     private fun renderProfile(p: PatientProfile): String {
         if (p.facts.isEmpty() && p.sessionNotes.isEmpty() && p.openHomework.isEmpty() &&
             p.displayName.isBlank() && p.moodLogs.isEmpty()
         ) {
-            return "═══ ТЕРАПЕВТИЧЕСКАЯ КАРТА ПАЦИЕНТА ═══\n(Карта пуста — это первая встреча. " +
-                "Узнай имя пациента и проведи первичное бережное знакомство. Зафиксируй запрос.)"
+            return "═══ ТЕРАПЕВТИЧЕСКАЯ КАРТА ПАЦИЕНТА ═══\n" +
+                "(Карта пуста. Сессия #1. Познакомься тепло, зафиксируй запрос.)"
         }
         return buildString {
-            append("═══ ТЕРАПЕВТИЧЕСКАЯ КАРТА ПАЦИЕНТА (твоя память) ═══\n")
-            if (p.displayName.isNotBlank()) append("Имя пациента: ${p.displayName}\n")
+            append("═══ ТЕРАПЕВТИЧЕСКАЯ КАРТА ПАЦИЕНТА ═══\n")
+            if (p.displayName.isNotBlank()) append("Имя: ${p.displayName}\n")
+            append("Сессия: #${p.sessionCount}\n")
 
             if (p.facts.isNotEmpty()) {
-                append("\nВыявленная структура личности (факты и гипотезы):\n")
+                append("\nСтруктура личности:\n")
                 p.facts.sortedByDescending { it.updatedAt }.take(45).forEach {
-                    append("• [${it.category.uppercase()}] ${it.key}: ${it.value}\n")
+                    val c = if (it.confidence >= 0.85f) "✓" else if (it.confidence >= 0.6f) "~" else "?"
+                    append("$c [${it.category.uppercase()}] ${it.key}: ${it.value}\n")
                 }
             }
-            p.activeRisk?.let {
-                append("\n⚠ АКТИВНЫЙ РИСК: ${it.level} — ${it.reason}\n")
-            }
+            p.activeRisk?.let { append("\n⚠ РИСК: ${it.level} — ${it.reason}\n") }
             if (p.openHomework.isNotEmpty()) {
-                append("\nТекущие домашние задания (узнай, как успехи):\n")
-                p.openHomework.forEach { append("• (${it.id}) ${it.title}: ${it.detail}\n") }
+                append("\nДЗ (проверь в начале):\n")
+                p.openHomework.forEach { append("• ${it.title}: ${it.detail}\n") }
             }
             if (p.moodLogs.isNotEmpty()) {
                 val recent = p.moodLogs.takeLast(7).joinToString(", ") { "${it.score}/10" }
-                append("\nДинамика настроения (последние сессии): $recent\n")
+                append("\nНастроение (последние 7): $recent\n")
             }
             if (p.sessionNotes.isNotEmpty()) {
                 append("\nИтоги прошлых встреч:\n")
@@ -99,16 +102,16 @@ object TherapistSession {
         }
     }
 
-    private fun renderRecentMessages(messages: List<ConversationMessage>): String {
-        if (messages.isEmpty()) return ""
+    private fun renderPreviousSessionMessages(p: PatientProfile): String {
+        val prev = p.previousSessionMessages
+        if (prev.isEmpty()) return ""
         return buildString {
-            append("═══ ПОСЛЕДНИЕ РЕПЛИКИ ДИАЛОГА (из прошлой сессии) ═══\n")
-            // Передаем только последние 15 сообщений, чтобы не перегружать контекст модели на старте
-            messages.takeLast(15).forEach { msg ->
-                val sender = if (msg.role == ConversationMessage.ROLE_USER) "Пациент" else "Ты (Терапевт)"
+            append("═══ РЕПЛИКИ ПРЕДЫДУЩЕЙ ВСТРЕЧИ ═══\n")
+            prev.takeLast(15).forEach { msg ->
+                val sender = if (msg.role == ConversationMessage.ROLE_USER) "Пациент" else "Ты"
                 append("$sender: ${msg.text}\n")
             }
-            append("\nИспользуй эти реплики, чтобы бесшовно войти в контакт и продолжить прерванную нить беседы, если это уместно.\n")
+            append("\nПродолжи нить прошлого разговора там, где остановились.\n")
         }
     }
 
@@ -122,6 +125,29 @@ object TherapistSession {
             }
             append("\nИспользуй эти записи аккуратно: мягко сошлись на них, если тема " +
                 "подходит к диалогу, но не устраивай допрос по написанному.")
+        }
+    }
+
+    private fun renderOpeningInstruction(p: PatientProfile): String = buildString {
+        append("═══ ИНСТРУКЦИЯ ПО ОТКРЫТИЮ ЭТОЙ СЕССИИ ═══\n")
+        when {
+            p.sessionCount <= 1 -> {
+                append("Первая встреча. Начни тепло, без медицинского языка.\n")
+                append("«Привет. Я рад, что ты здесь. Как ты сейчас, в эту минуту?»\n")
+            }
+            p.openHomework.isNotEmpty() -> {
+                append("Сессия #${p.sessionCount}. Есть невыполненные ДЗ — проверь после приветствия.\n")
+                append("Не критикуй если не выполнено — исследуй что мешало.\n")
+            }
+            p.moodLogs.lastOrNull()?.score?.let { it <= 4 } == true -> {
+                append("Сессия #${p.sessionCount}. Последнее настроение ${p.moodLogs.last().score}/10.\n")
+                append("«Как ты сейчас? Прошлый раз было непросто.» Будь внимателен к кризису.\n")
+            }
+            else -> {
+                val name = if (p.displayName.isNotBlank()) p.displayName else "тебя"
+                append("Сессия #${p.sessionCount}. «Привет, $name. Как ты?»\n")
+                append("Дай пациенту самому задать направление встречи.\n")
+            }
         }
     }
 
