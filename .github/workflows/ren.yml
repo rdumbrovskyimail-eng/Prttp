@@ -1,4 +1,4 @@
-name: Rename Package translator to rtp
+name: Rename Package translator to prttp
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ on:
 
 jobs:
   rename:
-    name: Rename translator to rtp
+    name: Rename translator to prttp
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -72,10 +72,10 @@ jobs:
             --include='*.json' \
             --include='*.pro' \
             --include='*.properties' \
-          | xargs -I{} sed -i 's/com\.translator\.app/com.rtp.app/g' {}
+          | xargs -I{} sed -i 's/com\.translator\.app/com.prttp.app/g' {}
           echo "File contents updated."
 
-      - name: Rename directory com/translator to com/rtp
+      - name: Rename directory com/translator to com/prttp
         if: github.event.inputs.dry_run == 'false'
         run: |
           find . -depth \
@@ -85,7 +85,7 @@ jobs:
             -type d \
             -path '*com/translator' \
           | while IFS= read -r dir; do
-              new_dir="${dir//com\/translator/com\/rtp}"
+              new_dir="${dir//com\/translator/com\/prttp}"
               echo "Moving: $dir -> $new_dir"
               mkdir -p "$(dirname "$new_dir")"
               mv "$dir" "$new_dir"
@@ -99,7 +99,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "Nothing to commit."
           else
-            git commit -m "refactor: rename package com.translator.app to com.rtp.app"
+            git commit -m "refactor: rename package com.translator.app to com.prttp.app"
             git push origin ${{ github.event.inputs.target_branch }}
             echo "Pushed to ${{ github.event.inputs.target_branch }}."
           fi
