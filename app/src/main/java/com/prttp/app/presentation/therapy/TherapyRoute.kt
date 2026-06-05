@@ -51,6 +51,7 @@ fun TherapyRoute(
         onEndSession = viewModel::endSession,
         onOpenResources = onOpenResources,
         onDismissImage = viewModel::dismissTherapyImage,
+        onThemeChange = viewModel::switchImageTheme,
         modifier = modifier
     )
 }
