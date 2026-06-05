@@ -9,6 +9,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -29,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.prttp.app.presentation.theme.LocalAppPalette
+import com.prttp.app.presentation.specializations.SpecializationsScreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,7 +50,8 @@ fun TherapyMainScreen(
                         text = when (selectedTab) {
                             0 -> "Пси-Сессия"
                             1 -> "Дневник мыслей"
-                            else -> "Профиль пациента"
+                            2 -> "Профиль пациента"
+                            else -> "Специализации"
                         },
                         fontWeight = FontWeight.Bold,
                         color = palette.textPrimary
@@ -120,6 +123,19 @@ fun TherapyMainScreen(
                         indicatorColor = palette.accentSoft
                     )
                 )
+                NavigationBarItem(
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 },
+                    icon = { Icon(Icons.Filled.Psychology, contentDescription = "Работа") },
+                    label = { Text("Работа") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = palette.accentPrimary,
+                        selectedTextColor = palette.accentPrimary,
+                        unselectedIconColor = palette.textSecondary,
+                        unselectedTextColor = palette.textSecondary,
+                        indicatorColor = palette.accentSoft
+                    )
+                )
             }
         }
     ) { paddingValues ->
@@ -133,6 +149,7 @@ fun TherapyMainScreen(
                 0 -> TherapyRoute(onOpenResources = onNavigateToCrisis)
                 1 -> JournalScreen()
                 2 -> ProfileScreen()
+                3 -> SpecializationsScreen()
             }
         }
     }
