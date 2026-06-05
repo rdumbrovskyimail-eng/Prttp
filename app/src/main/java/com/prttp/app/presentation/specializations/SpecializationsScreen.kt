@@ -1,6 +1,8 @@
 package com.prttp.app.presentation.specializations
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -29,7 +32,11 @@ import androidx.compose.ui.unit.sp
 import com.prttp.app.therapy.TherapistSpecializations
 
 @Composable
-fun SpecializationsScreen(modifier: Modifier = Modifier) {
+fun SpecializationsScreen(
+    currentTheme: com.prttp.app.therapy.ImageTheme,
+    onThemeSelected: (com.prttp.app.therapy.ImageTheme) -> Unit,
+    modifier: Modifier = Modifier
+) {
     val bg = Brush.verticalGradient(
         listOf(Color(0xFF0E1A24), Color(0xFF132A2E), Color(0xFF0E1A24))
     )
@@ -65,6 +72,87 @@ fun SpecializationsScreen(modifier: Modifier = Modifier) {
                 items = TherapistSpecializations.BLOCK_B,
                 accent = Color(0xFFB39DDB)
             )
+        }
+        item {
+            Spacer(Modifier.height(8.dp))
+            ImageThemePickerCard(
+                currentTheme = currentTheme,
+                onSelect = onThemeSelected
+            )
+        }
+    }
+}
+
+@Composable
+fun ImageThemePickerCard(
+    currentTheme: com.prttp.app.therapy.ImageTheme,
+    onSelect: (com.prttp.app.therapy.ImageTheme) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    androidx.compose.material3.Card(
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = Color(0xFF1A2D2C)
+        ),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                text = "Тема терапевтических изображений",
+                color = Color(0xFF6FE3C9),
+                fontSize = 13.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+            Text(
+                text = "ИИ будет подбирать образы в этом стиле",
+                color = Color(0x776FE3C9),
+                fontSize = 11.sp,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+            // Сетка тем 2 колонки
+            com.prttp.app.therapy.ImageTheme.values()
+                .toList()
+                .chunked(2)
+                .forEach { row ->
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                    ) {
+                        row.forEach { theme ->
+                            val selected = theme == currentTheme
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                                    .background(
+                                        if (selected) Color(0x336FE3C9) else Color(0x0AFFFFFF)
+                                    )
+                                    .border(
+                                        width = if (selected) 1.dp else 0.5.dp,
+                                        color = if (selected) Color(0xFF6FE3C9) else Color(0x226FE3C9),
+                                        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable { onSelect(theme) }
+                                    .padding(vertical = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(theme.emoji, fontSize = 20.sp)
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        text = theme.label,
+                                        color = if (selected) Color(0xFF6FE3C9) else Color(0x99CFE3E0),
+                                        fontSize = 11.sp,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                                    )
+                                }
+                            }
+                        }
+                        // Заполнить пустую ячейку если нечётное кол-во
+                        if (row.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
         }
     }
 }
