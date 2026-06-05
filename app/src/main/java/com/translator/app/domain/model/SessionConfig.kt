@@ -1,5 +1,7 @@
 package com.translator.app.domain.model
 
+import kotlinx.serialization.json.JsonArray
+
 data class SessionConfig(
     val model: String = DEFAULT_MODEL,
 
@@ -27,6 +29,7 @@ data class SessionConfig(
 
     // System instruction
     val systemInstruction: String = "",
+    val toolsJson: JsonArray? = null,
 
     // Transcription
     val inputTranscription: Boolean = true,
