@@ -53,14 +53,14 @@ class OnboardingViewModel @Inject constructor(
 
 @Composable
 fun OnboardingScreen(
-    onNavigateToTranslator: () -> Unit,
+    onNavigateToMain: () -> Unit,
     viewModel: OnboardingViewModel = hiltViewModel()
 ) {
     if (!viewModel.isLoaded) return
     val uriHandler = LocalUriHandler.current
 
     LaunchedEffect(Unit) {
-        if (viewModel.apiKey.isNotEmpty()) onNavigateToTranslator()
+        if (viewModel.apiKey.isNotEmpty()) onNavigateToMain()
     }
 
     Column(
@@ -68,10 +68,10 @@ fun OnboardingScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("Gemini Translate", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Text("Пси-Ассистент", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            "Добро пожаловать! Для работы синхронного переводчика необходим API ключ Google Gemini.",
+            "Добро пожаловать! Для работы голосового ассистента необходим API ключ Google Gemini.",
             fontSize = 15.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
@@ -96,12 +96,12 @@ fun OnboardingScreen(
 
         Spacer(modifier = Modifier.height(32.dp))
         Button(
-            onClick = { viewModel.saveAndContinue(onNavigateToTranslator) },
+            onClick = { viewModel.saveAndContinue(onNavigateToMain) },
             enabled = viewModel.apiKey.isNotBlank(),
             modifier = Modifier.fillMaxWidth().height(56.dp),
             shape = RoundedCornerShape(16.dp)
         ) {
-            Text("Перейти в переводчик", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text("Войти в приложение", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
