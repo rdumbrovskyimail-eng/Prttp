@@ -80,5 +80,9 @@ data class AppSettings(
     // ═══════════════════ 10. DEBUG ═══════════════════
     val showDebugLog: Boolean = false,
     val logRawWebSocketFrames: Boolean = false,
-    val showUsageMetadata: Boolean = false
+    val showUsageMetadata: Boolean = false,
+
+    // ═══════════════════ 11. VISUAL THERAPY ═══════════════════
+    val pexelsApiKey: String = "",          // Ключ от pexels.com/api (бесплатно)
+    val therapyImagesEnabled: Boolean = true
 )
