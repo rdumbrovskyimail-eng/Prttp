@@ -107,6 +107,20 @@ class TherapistToolHandler @Inject constructor(
                 }
             }
 
+            ToolName.READ_DIALOGUE_HISTORY -> {
+                val limit = a.num("limit")?.toInt() ?: 30
+                val messages = repo.profile.value.messages
+                if (messages.isEmpty()) {
+                    "История диалогов пуста."
+                } else {
+                    // Извлекаем последние N сообщений диалога, переводя роли на понятные ИИ
+                    messages.takeLast(limit.coerceIn(1, 100)).joinToString("\n") { msg ->
+                        val sender = if (msg.role == "user") "Пациент" else "Терапевт"
+                        "[$sender]: ${msg.text}"
+                    }
+                }
+            }
+
             else -> "error: unknown tool ${call.name}"
         }
     }
