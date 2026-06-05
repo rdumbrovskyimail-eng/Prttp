@@ -1,27 +1,3 @@
-// Путь: app/src/main/java/com/translator/app/therapy/TherapistTools.kt
-//
-// Объявления function-call инструментов, через которые Gemini САМ пишет и
-// читает базу пациента во время живого голосового разговора.
-//
-// Как это связано с существующим кодом:
-//   • Gemini присылает GeminiEvent.ToolCall(List<FunctionCall>) — это уже
-//     парсится в GeminiLiveClient.
-//   • TherapistToolHandler исполняет вызовы поверх PatientRepository и
-//     отвечает через LiveClient.sendToolResponse(List<ToolResponse>).
-//
-// Чтобы Gemini вообще ЗНАЛ про инструменты, их декларации надо добавить в
-// setup-кадр. Для этого:
-//   1) в data class SessionConfig добавить поле:
-//          val toolsJson: JsonArray? = null
-//   2) в GeminiLiveClient.buildFullSetup(...) внутри put("setup", { ... })
-//      дописать:
-//          config.toolsJson?.let { tools ->
-//              put("tools", buildJsonArray {
-//                  add(buildJsonObject { put("functionDeclarations", tools) })
-//              })
-//          }
-//   (формат по докам Live API: setup.tools[].functionDeclarations[])
-// ═══════════════════════════════════════════════════════════════════════════
 package com.translator.app.therapy
 
 import kotlinx.serialization.json.JsonArray
@@ -30,7 +6,6 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-/** Имена инструментов — единый источник для деклараций и обработчика. */
 object ToolName {
     const val UPDATE_PROFILE   = "update_profile"
     const val SET_NAME         = "set_patient_name"
@@ -45,100 +20,88 @@ object ToolName {
 
 object TherapistTools {
 
-    /** JSON-массив functionDeclarations для setup.tools. */
     fun declarations(): JsonArray = buildJsonArray {
 
-        // — запись структурированного факта о пациенте —
         add(decl(
             name = ToolName.UPDATE_PROFILE,
-            description = "Сохранить или обновить структурированный факт о пациенте в его " +
-                "долговременном профиле. Вызывай, как только узнал что-то клинически " +
-                "значимое: основную жалобу, симптом, триггер, автоматическую мысль, цель, " +
-                "ресурс, предпочтение в общении. Один вызов = один факт.",
+            description = "Сохранить или обновить структурированный факт о личности пациента в его долговременном профиле. " +
+                "Вызывай инструмент сразу, как только выявил значимый элемент психологической структуры. " +
+                "Категории распределять строго: " +
+                "presenting_concern (запрос), history (анамнез), symptom (симптом), trigger (триггер), " +
+                "core_belief (глубинное убеждение), cognitive_style (когнитивное искажение), " +
+                "defense_mechanism (защитный механизм), maladaptive_schema (ранняя схема по Янгу), " +
+                "behavior_pattern (паттерн поведения/избегания), emotional_block (зоны подавленного аффекта), " +
+                "coping_strategy (адаптивный ресурс), therapeutic_goal (цель терапии).",
             params = {
-                strParam("category", "Категория: presenting_concern, history, symptom, trigger, " +
-                    "cognition, coping, strength, goal, relationship, preference, boundary, medical", true)
-                strParam("key", "Короткий ярлык факта, например 'триггер: открытое пространство'", true)
-                strParam("value", "Содержание факта своими словами", true)
-                numParam("confidence", "Уверенность 0..1: 0.9 — наблюдал прямо, 0.5 — гипотеза", false)
+                strParam("category", "Категория: presenting_concern, history, symptom, trigger, core_belief, cognitive_style, defense_mechanism, maladaptive_schema, behavior_pattern, emotional_block, coping_strategy, therapeutic_goal", true)
+                strParam("key", "Короткий ярлык, например 'глубинное убеждение: я никчемен' или 'схема: покинутость/нестабильность'", true)
+                strParam("value", "Содержание факта или паттерна своими словами с примером проявления", true)
+                numParam("confidence", "Уверенность 0..1: 0.9 — подтверждено пациентом, 0.5 — терапевтическая гипотеза", false)
             }
         ))
 
         add(decl(
             name = ToolName.SET_NAME,
-            description = "Запомнить, как пациент просит к нему обращаться.",
+            description = "Запомнить имя пациента или предпочтительное обращение.",
             params = { strParam("name", "Имя или обращение", true) }
         ))
 
-        // — заметка сессии (вызывать ближе к концу разговора) —
         add(decl(
             name = ToolName.SAVE_SESSION_NOTE,
-            description = "Сохранить заметку по итогам сессии. Вызывай в конце разговора или " +
-                "когда тема логически завершилась. Кратко, по-клинически, без воды.",
+            description = "Сохранить клиническую заметку по итогам сессии. Вызывай в конце разговора. Кратко зафиксируй динамику.",
             params = {
                 strParam("summary", "Резюме разговора, 2–4 предложения", true)
-                strParam("observations", "Наблюдения: аффект, динамика, важные темы", false)
-                strParam("techniques", "Применённые методы через запятую (КПТ-реструктуризация, " +
-                    "заземление 5-4-3-2-1, мотивационное интервью...)", false)
+                strParam("observations", "Наблюдения: аффект, сопротивление, защитные механизмы", false)
+                strParam("techniques", "Применённые методы через запятую (экспозиция, когнитивная реструктуризация, работа с режимами схем)", false)
             }
         ))
 
         add(decl(
             name = ToolName.LOG_MOOD,
-            description = "Зафиксировать срез настроения пациента по шкале 1..10, если он его " +
-                "назвал или его явно можно оценить из разговора.",
+            description = "Зафиксировать замер настроения пациента по шкале от 1 до 10.",
             params = {
-                numParam("score", "1 — очень плохо, 10 — отлично", true)
-                strParam("note", "Короткий контекст", false)
+                numParam("score", "1 — крайне плохо, 10 — отлично", true)
+                strParam("note", "Контекст (например: тревога из-за предстоящего звонка)", false)
             }
         ))
 
         add(decl(
             name = ToolName.ADD_HOMEWORK,
-            description = "Назначить домашнее задание / поведенческий эксперимент между сессиями. " +
-                "Только конкретное и выполнимое.",
+            description = "Назначить домашнее задание или поведенческий эксперимент. Только конкретные, понятные и выполнимые действия.",
             params = {
-                strParam("title", "Что сделать, одной фразой", true)
-                strParam("detail", "Как именно, когда, сколько", false)
-                strParam("method", "Метод: behavioral_activation, exposure, thought_record...", false)
+                strParam("title", "Короткое название задания", true)
+                strParam("detail", "Подробная инструкция по выполнению", false)
+                strParam("method", "Метод: behavioral_activation, schema_dialogue, ACT_defusion, thought_record", false)
             }
         ))
 
         add(decl(
             name = ToolName.COMPLETE_HOMEWORK,
-            description = "Отметить домашнее задание выполненным по его id (id берётся из профиля).",
-            params = { strParam("id", "id задания", true) }
+            description = "Отметить домашнее задание как выполненное по его уникальному ID.",
+            params = { strParam("id", "ID задания из профиля", true) }
         ))
 
-        // — клинический флаг риска (драйвит баннер экстренной помощи в UI) —
         add(decl(
             name = ToolName.FLAG_CONCERN,
-            description = "Поднять клинический флаг, если замечен риск. level=crisis при " +
-                "суицидальных мыслях/плане, психозе, угрозе для себя/других — в этом случае " +
-                "ты ОБЯЗАН одновременно перейти к стабилизации и направить к живой экстренной " +
-                "помощи. Это сигнал приложению показать ресурсы помощи, НЕ диагноз.",
+            description = "Зарегистрировать клиническую озабоченность или риск. level=crisis — суицидальные мысли/намерения, тяжелый дистресс, насилие.",
             params = {
                 strParam("level", "none, low, moderate, high, crisis", true)
-                strParam("reason", "На основании чего (наблюдение, не вердикт)", true)
+                strParam("reason", "Описание риска на основе наблюдения поведения или слов пациента", true)
             }
         ))
 
-        // — чтение (если инжекта в промпт мало и нужны детали) —
         add(decl(
             name = ToolName.READ_JOURNAL,
-            description = "Прочитать последние записи дневника пациента (его собственные тексты), " +
-                "чтобы опереться на них в разговоре.",
-            params = { numParam("days", "За сколько последних дней (по умолчанию 14)", false) }
+            description = "Прочитать последние личные записи из дневника пациента за указанный промежуток.",
+            params = { numParam("days", "За сколько дней (по умолчанию 14)", false) }
         ))
 
         add(decl(
             name = ToolName.READ_PROFILE,
-            description = "Перечитать полный актуальный профиль пациента, если нужно освежить детали.",
+            description = "Прочитать полную терапевтическую карту пациента, чтобы освежить в памяти структуру его личности.",
             params = { }
         ))
     }
-
-    // ── helpers для сборки схемы (OpenAPI-подмножество, как в Gemini) ──────────
 
     private inline fun decl(
         name: String,
@@ -157,7 +120,7 @@ object TherapistTools {
 
     class ParamBuilder {
         val required = mutableListOf<String>()
-        private val props = mutableListOf<Pair<String, Pair<String, String>>>() // name -> (type, desc)
+        private val props = mutableListOf<Pair<String, Pair<String, String>>>()
 
         fun strParam(name: String, desc: String, isRequired: Boolean) {
             props += name to ("string" to desc); if (isRequired) required += name
