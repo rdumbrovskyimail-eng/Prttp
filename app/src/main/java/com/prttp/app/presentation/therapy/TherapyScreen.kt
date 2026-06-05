@@ -46,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.prttp.app.presentation.therapy.TherapyImageOverlay
 
 /** Фазы разговора для индикатора присутствия. */
 enum class TherapyPhase { Idle, Connecting, Listening, AssistantSpeaking, Reconnecting }
@@ -73,6 +74,7 @@ fun TherapyScreen(
     onToggleMute: () -> Unit,
     onEndSession: () -> Unit,
     onOpenResources: () -> Unit,
+    onDismissImage: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val bg = Brush.verticalGradient(
@@ -187,6 +189,16 @@ fun TherapyScreen(
                 }
             }
         }
+
+        // ── Терапевтическое изображение ──
+        TherapyImageOverlay(
+            image      = state.therapyImage,
+            isLoading  = state.imageLoading,
+            onDismiss  = onDismissImage,
+            modifier   = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = if (state.phase != TherapyPhase.Idle) 120.dp else 16.dp)
+        )
     }
 }
 
