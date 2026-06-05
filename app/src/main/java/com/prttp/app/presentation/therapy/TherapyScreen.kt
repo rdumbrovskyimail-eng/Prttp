@@ -46,7 +46,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.prttp.app.data.TherapyImage
 import com.prttp.app.presentation.therapy.TherapyImageOverlay
+import com.prttp.app.therapy.ImageTheme
 
 /** Фазы разговора для индикатора присутствия. */
 enum class TherapyPhase { Idle, Connecting, Listening, AssistantSpeaking, Reconnecting }
@@ -63,8 +65,9 @@ data class TherapyUiState(
     val crisisReason: String = "",
     val lastCaption: String = "",
     val activeActionStatus: String = "",
-    val therapyImage: com.prttp.app.data.TherapyImage? = null,
-    val imageLoading: Boolean = false
+    val therapyImage: TherapyImage? = null,
+    val imageLoading: Boolean = false,
+    val currentImageTheme: ImageTheme = ImageTheme.NATURE
 )
 
 @Composable
