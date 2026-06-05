@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import com.prttp.app.GeminiLiveForegroundService
 import com.prttp.app.data.NetworkMonitor
 import com.prttp.app.data.PatientRepository
+import com.prttp.app.data.PexelsImageRepository
 import com.prttp.app.data.settings.AppSettings
 import com.prttp.app.domain.AudioEngine
 import com.prttp.app.domain.LiveClient
@@ -49,6 +50,7 @@ class TherapyViewModel @Inject constructor(
     private val settingsStore: DataStore<AppSettings>,
     private val repo: PatientRepository,
     private val toolHandler: TherapistToolHandler,
+    private val pexels: PexelsImageRepository,
     private val logger: AppLogger
 ) : ViewModel() {
 
@@ -60,6 +62,7 @@ class TherapyViewModel @Inject constructor(
     private var reconnectJob: Job? = null
     private var stuckTurnWatchdogJob: Job? = null
     private var responseTimeoutJob: Job? = null
+    private var imageDismissJob: Job? = null
     private val sessionMutex = Mutex()
 
     companion object {
@@ -90,6 +93,10 @@ class TherapyViewModel @Inject constructor(
                 _state.update { it.copy(crisis = CrisisLevel.Elevated, crisisReason = reason) }
             }
         }
+
+        toolHandler.onShowImage = { query, caption ->
+            loadTherapyImage(query, caption)
+        }
     }
 
     private fun observeProfileName() {
@@ -118,6 +125,7 @@ class TherapyViewModel @Inject constructor(
             audioEngine.setSpeakerRouting(settings.forceSpeakerOutput)
             audioEngine.setUseAec(settings.useAec)
 
+            toolHandler.pexelsApiKey = settings.pexelsApiKey
             startForegroundServiceSafe(settings.forceSpeakerOutput)
             runCatching { liveClient.resetSession() }
             connect(freshSession = true)
@@ -128,6 +136,8 @@ class TherapyViewModel @Inject constructor(
         viewModelScope.launch {
             stuckTurnWatchdogJob?.cancel(); stuckTurnWatchdogJob = null
             responseTimeoutJob?.cancel(); responseTimeoutJob = null
+            imageDismissJob?.cancel(); imageDismissJob = null
+            _state.update { it.copy(therapyImage = null, imageLoading = false) }
             saveAccumulatedTurnMessages()
             reconnectJob?.cancel(); reconnectJob = null
             micJob?.cancel(); micJob = null
@@ -413,6 +423,38 @@ class TherapyViewModel @Inject constructor(
         if (!fgsStarted) return
         runCatching { appContext.startService(GeminiLiveForegroundService.stopIntent(appContext)) }
         fgsStarted = false
+    }
+
+    private fun loadTherapyImage(query: String, caption: String) {
+        viewModelScope.launch {
+            // Проверяем что фичя включена и ключ задан
+            val settings = settingsStore.data.first()
+            if (!settings.therapyImagesEnabled || settings.pexelsApiKey.isBlank()) return@launch
+
+            _state.update { it.copy(imageLoading = true) }
+
+            val image = pexels.fetchImage(
+                apiKey  = settings.pexelsApiKey,
+                query   = query,
+                caption = caption
+            )
+
+            _state.update { it.copy(therapyImage = image, imageLoading = false) }
+
+            if (image != null) {
+                // Авто-сброс через 40 секунд
+                imageDismissJob?.cancel()
+                imageDismissJob = viewModelScope.launch {
+                    kotlinx.coroutines.delay(40_000L)
+                    _state.update { it.copy(therapyImage = null) }
+                }
+            }
+        }
+    }
+
+    fun dismissTherapyImage() {
+        imageDismissJob?.cancel()
+        _state.update { it.copy(therapyImage = null, imageLoading = false) }
     }
 
     override fun onCleared() {
