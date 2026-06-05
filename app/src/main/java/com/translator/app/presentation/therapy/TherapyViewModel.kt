@@ -1,24 +1,6 @@
-// Путь: app/src/main/java/com/translator/app/presentation/therapy/TherapyViewModel.kt
-//
-// ViewModel сессии пси-ассистента. Сшивает воедино:
-//   • connect к Gemini Live с инжектом профиля+дневника (TherapistSession),
-//   • микрофонный цикл и проигрывание (тот же AudioEngine, что у переводчика),
-//   • обработку function-call'ов (GeminiEvent.ToolCall → TherapistToolHandler),
-//   • кризисное состояние для баннера,
-//   • лёгкий авто-реконнект и мониторинг сети.
-//
-// Построен по образцу TranslatorViewModel, чтобы поведение транспорта/аудио
-// совпадало с уже отлаженным переводчиком.
-//
-// ПРИМЕЧАНИЕ про общий LiveClient: он @Singleton и общий с переводчиком.
-// Поэтому перед стартом терапии убедись, что сессия переводчика остановлена
-// (в навигации останавливай один экран перед открытием другого). Если нужна
-// полная изоляция — заведи отдельный qualified LiveClient в DI.
-// ═══════════════════════════════════════════════════════════════════════════
 package com.translator.app.presentation.therapy
 
 import android.Manifest
-import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
@@ -31,6 +13,7 @@ import com.translator.app.data.PatientRepository
 import com.translator.app.data.settings.AppSettings
 import com.translator.app.domain.AudioEngine
 import com.translator.app.domain.LiveClient
+import com.translator.app.domain.model.ConversationMessage
 import com.translator.app.domain.model.GeminiEvent
 import com.translator.app.domain.model.RiskLevel
 import com.translator.app.domain.model.SessionConfig
@@ -76,6 +59,10 @@ class TherapyViewModel @Inject constructor(
     private val hasModelOutputThisTurn = AtomicBoolean(false)
     private val networkLost = AtomicBoolean(false)
 
+    // Накопители фрагментов текущего хода
+    private val accumulatedUserText = StringBuilder()
+    private val accumulatedModelText = StringBuilder()
+
     @Volatile private var cachedSettings: AppSettings = AppSettings()
     @Volatile private var activeApiKey: String = ""
     @Volatile private var fgsStarted = false
@@ -87,7 +74,6 @@ class TherapyViewModel @Inject constructor(
         observeNetwork()
         observeProfileName()
 
-        // Кризисный флаг от ассистента → поднимаем баннер на экране.
         toolHandler.onCrisisFlag = { level, reason ->
             if (level.severity >= RiskLevel.HIGH.severity) {
                 _state.update { it.copy(crisis = CrisisLevel.Elevated, crisisReason = reason) }
@@ -103,8 +89,6 @@ class TherapyViewModel @Inject constructor(
         }
     }
 
-    // ── публичные действия экрана ─────────────────────────────────────────────
-
     fun startSession() {
         if (connected) return
         viewModelScope.launch {
@@ -117,7 +101,6 @@ class TherapyViewModel @Inject constructor(
             activeApiKey = settings.apiKey
             _state.update { it.copy(phase = TherapyPhase.Connecting) }
 
-            // Аудио-настройки как у переводчика.
             audioEngine.setPlaybackVolume(settings.playbackVolume / 100f)
             audioEngine.setMicGain(settings.micGain / 100f)
             audioEngine.setSpeakerRouting(settings.forceSpeakerOutput)
@@ -131,6 +114,7 @@ class TherapyViewModel @Inject constructor(
 
     fun endSession() {
         viewModelScope.launch {
+            saveAccumulatedTurnMessages() // Сохраняем неполные реплики перед завершением сессии
             reconnectJob?.cancel(); reconnectJob = null
             micJob?.cancel(); micJob = null
             runCatching { audioEngine.stopCapture() }
@@ -153,18 +137,15 @@ class TherapyViewModel @Inject constructor(
         _state.update { it.copy(crisis = CrisisLevel.None) }
     }
 
-    /** Вызывается после выдачи разрешения на микрофон. */
     fun onMicPermissionGranted() {
         if (!fgsStarted) startForegroundServiceSafe(cachedSettings.forceSpeakerOutput)
         if (connected && !_state.value.micMuted) startMic()
     }
 
-    // ── подключение ───────────────────────────────────────────────────────────
-
     private suspend fun connect(freshSession: Boolean) = sessionMutex.withLock {
-        // Профиль и дневник — мгновенно из памяти репозитория, инжектятся в промпт.
-        val profile = repo.profile.value
-        val journal = repo.journal.value
+        // Гарантируем загрузку перед чтением
+        val profile = repo.getProfile()
+        val journal = repo.getJournal()
         val base = TherapistSession.buildConfig(
             profile = profile,
             recentJournal = journal,
@@ -191,8 +172,6 @@ class TherapyViewModel @Inject constructor(
         }
     }
 
-    // ── микрофон ───────────────────────────────────────────────────────────────
-
     private fun hasMicPermission() = ContextCompat.checkSelfPermission(
         appContext, Manifest.permission.RECORD_AUDIO
     ) == PackageManager.PERMISSION_GRANTED
@@ -211,7 +190,18 @@ class TherapyViewModel @Inject constructor(
         viewModelScope.launch { runCatching { audioEngine.stopCapture() } }
     }
 
-    // ── события Gemini ──────────────────────────────────────────────────────────
+    private fun saveAccumulatedTurnMessages() {
+        val userText = accumulatedUserText.toString().trim()
+        if (userText.isNotEmpty()) {
+            viewModelScope.launch { repo.addMessage(ConversationMessage.ROLE_USER, userText) }
+            accumulatedUserText.clear()
+        }
+        val modelText = accumulatedModelText.toString().trim()
+        if (modelText.isNotEmpty()) {
+            viewModelScope.launch { repo.addMessage(ConversationMessage.ROLE_MODEL, modelText) }
+            accumulatedModelText.clear()
+        }
+    }
 
     private fun observeEvents() {
         viewModelScope.launch {
@@ -236,26 +226,31 @@ class TherapyViewModel @Inject constructor(
                         }
                     }
 
-                    // СУБТИТР последней реплики ассистента (для доступности).
+                    is GeminiEvent.InputTranscript -> {
+                        accumulatedUserText.append(event.text)
+                    }
+
                     is GeminiEvent.OutputTranscript -> {
+                        accumulatedModelText.append(event.text)
                         _state.update { it.copy(lastCaption = event.text.take(220)) }
                     }
 
-                    // ★ ГЛАВНОЕ: ассистент пишет/читает базу через function calls.
                     is GeminiEvent.ToolCall -> {
                         viewModelScope.launch {
                             val responses = toolHandler.handle(event.calls)
-                            liveClient.sendToolResponse(responses) // синхронно — отвечаем сразу
+                            liveClient.sendToolResponse(responses)
                         }
                     }
 
-                    is GeminiEvent.ToolCallCancellation -> { /* sync-режим: no-op */ }
+                    is GeminiEvent.ToolCallCancellation -> {}
 
                     is GeminiEvent.Interrupted -> {
                         runCatching { audioEngine.flushPlayback() }
                         hasModelOutputThisTurn.set(false)
                         lastSeenTurnId.set(Long.MIN_VALUE)
                         if (connected) _state.update { it.copy(phase = TherapyPhase.Listening) }
+                        
+                        saveAccumulatedTurnMessages() // Сохраняем диалог при перебивании
                     }
 
                     is GeminiEvent.TurnComplete -> {
@@ -263,6 +258,8 @@ class TherapyViewModel @Inject constructor(
                         hasModelOutputThisTurn.set(false)
                         lastSeenTurnId.set(Long.MIN_VALUE)
                         if (connected) _state.update { it.copy(phase = TherapyPhase.Listening) }
+                        
+                        saveAccumulatedTurnMessages() // Сохраняем реплики в базу при штатном завершении хода
                     }
 
                     is GeminiEvent.GoAway -> scheduleReconnect()
@@ -302,8 +299,6 @@ class TherapyViewModel @Inject constructor(
             }
         }
     }
-
-    // ── foreground service ──────────────────────────────────────────────────────
 
     private fun startForegroundServiceSafe(forceSpeaker: Boolean) {
         if (!hasMicPermission()) return
