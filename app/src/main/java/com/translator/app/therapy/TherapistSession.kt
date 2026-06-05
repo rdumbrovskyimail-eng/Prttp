@@ -1,5 +1,6 @@
 package com.translator.app.therapy
 
+import com.translator.app.domain.model.ConversationMessage
 import com.translator.app.domain.model.JournalEntry
 import com.translator.app.domain.model.LatencyProfile
 import com.translator.app.domain.model.PatientProfile
@@ -18,18 +19,16 @@ object TherapistSession {
     ): SessionConfig = SessionConfig(
         model = model,
         responseModality = "AUDIO",
-        // Умеренная температура для баланса между эмпатичной живостью и строгим клиническим ведением
         temperature = 0.55f,
         topP = 0.95f,
         maxOutputTokens = 8192,
         voiceId = voiceId,
 
-        // Переводим ИИ на профиль Balanced (thinkingLevel = "medium").
-        // Модель берет паузу перед ответом для глубокого анализа дезадаптивных схем и когнитивного стиля.
+        // Настройка Balanced (thinkingLevel = "medium") задействует клинические рассуждения ИИ перед ответом
         latencyProfile = LatencyProfile.Balanced,
         thinkingIncludeThoughts = false,
 
-        // VAD настройки, препятствующие агрессивному перебиванию терапевта во время пауз пациента
+        // VAD настройки, препятствующие прерыванию речи на естественных паузах пациента
         autoActivityDetection = true,
         vadStartSensitivity = "START_SENSITIVITY_LOW",
         vadEndSensitivity = "END_SENSITIVITY_LOW",
@@ -57,6 +56,9 @@ object TherapistSession {
         append("\n\n")
         append(renderProfile(profile))
         append("\n\n")
+        // Подмешиваем последние 15 реплик предыдущей встречи в промпт для бесшовного продолжения
+        append(renderRecentMessages(profile.messages))
+        append("\n\n")
         append(renderJournal(recentJournal))
     }
 
@@ -64,7 +66,7 @@ object TherapistSession {
         if (p.facts.isEmpty() && p.sessionNotes.isEmpty() && p.openHomework.isEmpty() &&
             p.displayName.isBlank() && p.moodLogs.isEmpty()
         ) {
-            return "═══ ПРОФИЛЬ ПАЦИЕНТА ═══\n(Карта пуста — это первая встреча. " +
+            return "═══ ТЕРАПЕВТИЧЕСКАЯ КАРТА ПАЦИЕНТА ═══\n(Карта пуста — это первая встреча. " +
                 "Узнай имя пациента и проведи первичное бережное знакомство. Зафиксируй запрос.)"
         }
         return buildString {
@@ -94,6 +96,19 @@ object TherapistSession {
                     append("• ${fmt(it.createdAt)}: ${it.summary}\n")
                 }
             }
+        }
+    }
+
+    private fun renderRecentMessages(messages: List<ConversationMessage>): String {
+        if (messages.isEmpty()) return ""
+        return buildString {
+            append("═══ ПОСЛЕДНИЕ РЕПЛИКИ ДИАЛОГА (из прошлой сессии) ═══\n")
+            // Передаем только последние 15 сообщений, чтобы не перегружать контекст модели на старте
+            messages.takeLast(15).forEach { msg ->
+                val sender = if (msg.role == ConversationMessage.ROLE_USER) "Пациент" else "Ты (Терапевт)"
+                append("$sender: ${msg.text}\n")
+            }
+            append("\nИспользуй эти реплики, чтобы бесшовно войти в контакт и продолжить прерванную нить беседы, если это уместно.\n")
         }
     }
 
