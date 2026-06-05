@@ -50,6 +50,7 @@ fun TherapyRoute(
         onToggleMute = viewModel::toggleMute,
         onEndSession = viewModel::endSession,
         onOpenResources = onOpenResources,
+        onDismissImage = viewModel::dismissTherapyImage,
         modifier = modifier
     )
 }
