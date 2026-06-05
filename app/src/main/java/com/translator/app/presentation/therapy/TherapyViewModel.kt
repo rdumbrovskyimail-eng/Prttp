@@ -1,6 +1,7 @@
 package com.translator.app.presentation.therapy
 
 import android.Manifest
+import android.content.Context // <-- Недостающий импорт, исправляющий ошибку сборки KSP
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
@@ -219,8 +220,8 @@ class TherapyViewModel @Inject constructor(
                 "complete_homework" -> "⚡ Выполнение ДЗ (ID: ${cleanArgs["id"]})"
                 "flag_clinical_concern" -> "⚠ Контроль рисков: флаг [${cleanArgs["level"]?.uppercase()}]"
                 "read_recent_journal" -> "⚡ Чтение дневника за ${cleanArgs["days"] ?: "14"} дн."
-                "read_dialogue_history" -> "⚡ Анализ архива: чтение последних ${cleanArgs["limit"] ?: "30"} реплик диалога"
                 "read_full_profile" -> "⚡ Анализ всей терапевтической карты"
+                "read_dialogue_history" -> "⚡ Анализ архива: чтение последних ${cleanArgs["limit"] ?: "30"} реплик диалога"
                 else -> "⚡ Вызов: ${call.name}"
             }
         }
@@ -283,14 +284,12 @@ class TherapyViewModel @Inject constructor(
 
                     is GeminiEvent.ToolCall -> {
                         viewModelScope.launch {
-                            // Формируем и выводим статус операции ИИ на экран
                             val statusText = formatToolCalls(event.calls)
                             _state.update { it.copy(activeActionStatus = statusText) }
 
                             val responses = toolHandler.handle(event.calls)
                             liveClient.sendToolResponse(responses)
 
-                            // Показываем капсулу завершенной операции еще 3.5 секунды, затем скрываем
                             delay(3500)
                             _state.update { it.copy(activeActionStatus = "") }
                         }
