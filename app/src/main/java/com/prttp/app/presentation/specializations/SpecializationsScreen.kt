@@ -21,8 +21,12 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.prttp.app.presentation.specializations.SpecializationsViewModel
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -33,10 +37,10 @@ import com.prttp.app.therapy.TherapistSpecializations
 
 @Composable
 fun SpecializationsScreen(
-    currentTheme: com.prttp.app.therapy.ImageTheme,
-    onThemeSelected: (com.prttp.app.therapy.ImageTheme) -> Unit,
+    viewModel: SpecializationsViewModel = hiltViewModel(),
     modifier: Modifier = Modifier
 ) {
+    val uiState by viewModel.uiState.collectAsState()
     val bg = Brush.verticalGradient(
         listOf(Color(0xFF0E1A24), Color(0xFF132A2E), Color(0xFF0E1A24))
     )
@@ -76,8 +80,8 @@ fun SpecializationsScreen(
         item {
             Spacer(Modifier.height(8.dp))
             ImageThemePickerCard(
-                currentTheme = currentTheme,
-                onSelect = onThemeSelected
+                currentTheme = uiState.currentTheme,
+                onSelect = viewModel::onThemeSelected
             )
         }
     }
