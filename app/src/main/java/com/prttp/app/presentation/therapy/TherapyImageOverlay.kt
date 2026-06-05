@@ -140,7 +140,7 @@ fun TherapyImageOverlay(
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        items(ImageTheme.values()) { theme ->
+                        items(ImageTheme.entries.toList()) { theme ->
                             val selected = theme == currentTheme
                             Box(
                                 modifier = Modifier
