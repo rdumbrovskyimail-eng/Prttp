@@ -2,6 +2,7 @@ package com.prttp.app.domain.model
 
 import androidx.compose.runtime.Immutable
 import kotlinx.serialization.Serializable
+import com.prttp.app.therapy.ImageTheme
 
 // ─────────────────────────────────────────────────────────────────────────
 //  ПРОФИЛЬ ПАЦИЕНТА И СТРУКТУРНЫЕ КАТЕГОРИИ АНАЛИЗА
@@ -56,6 +57,7 @@ data class PatientProfile(
     val messages: List<ConversationMessage> = emptyList(),
     val sessionCount: Int = 0,
     val currentSessionId: String = "",
+    val imageTheme: ImageTheme = ImageTheme.NATURE,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {
