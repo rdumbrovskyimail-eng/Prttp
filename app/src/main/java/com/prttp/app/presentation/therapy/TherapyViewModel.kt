@@ -268,33 +268,6 @@ class TherapyViewModel @Inject constructor(
         stuckTurnWatchdogJob = viewModelScope.launch {
             delay(STUCK_TURN_TIMEOUT_MS)
             if (_state.value.phase == TherapyPhase.AssistantSpeaking) {
-                logger.w("⚠ stuckTurnWatchdog: TurnComplete не пришёл за ${STUCK_TURN_TIMEOUT_MS}ms")
-                runCatching { audioEngine.flushPlayback() }
-                audioEngine.onTurnComplete()
-                hasModelOutputThisTurn.set(false)
-                lastSeenTurnId.set(Long.MIN_VALUE)
-                saveAccumulatedTurnMessages()
-                if (connected) _state.update { it.copy(phase = TherapyPhase.Listening, lastCaption = "") }
-            }
-        }
-    }
-
-    private fun startResponseTimeoutWatchdog() {
-        responseTimeoutJob?.cancel()
-        responseTimeoutJob = viewModelScope.launch {
-            delay(RESPONSE_TIMEOUT_MS)
-            if (_state.value.phase == TherapyPhase.Listening && connected && !hasModelOutputThisTurn.get()) {
-                logger.w("⚠ responseTimeout: ИИ не ответил за ${RESPONSE_TIMEOUT_MS}ms")
-                scheduleReconnect()
-            }
-        }
-    }
-
-    private fun startStuckTurnWatchdog() {
-        stuckTurnWatchdogJob?.cancel()
-        stuckTurnWatchdogJob = viewModelScope.launch {
-            delay(STUCK_TURN_TIMEOUT_MS)
-            if (_state.value.phase == TherapyPhase.AssistantSpeaking) {
                 logger.w("stuckTurnWatchdog: TurnComplete не пришёл за ${STUCK_TURN_TIMEOUT_MS}ms")
                 runCatching { audioEngine.flushPlayback() }
                 runCatching { audioEngine.onTurnComplete() }
