@@ -38,15 +38,17 @@ class PexelsImageRepository @Inject constructor(
     suspend fun fetchImage(
         apiKey: String,
         query: String,
-        caption: String = ""
+        caption: String = "",
+        theme: ImageTheme = ImageTheme.NATURE
     ): TherapyImage? {
         if (apiKey.isBlank()) return null
+        val enrichedQuery = ImageTheme.enrichQuery(query, theme)
 
-        cache[query]?.let { return it.copy(caption = caption) }
+        cache[enrichedQuery]?.let { return it.copy(caption = caption) }
 
         return withContext(Dispatchers.IO) {
             runCatching {
-                val encoded = java.net.URLEncoder.encode(query, "UTF-8")
+                val encoded = java.net.URLEncoder.encode(enrichedQuery, "UTF-8")
                 val request = Request.Builder()
                     .url("https://api.pexels.com/v1/search?query=$encoded&per_page=5&orientation=landscape")
                     .header("Authorization", apiKey)
@@ -61,9 +63,9 @@ class PexelsImageRepository @Inject constructor(
                 TherapyImage(
                     url      = photo.src.large.ifBlank { photo.src.medium },
                     thumbUrl = photo.src.medium,
-                    query    = query,
+                    query    = enrichedQuery,
                     caption  = caption
-                ).also { cache[query] = it }
+                ).also { cache[enrichedQuery] = it }
 
             }.onFailure { logger.e("Pexels error: ${it.message}", it) }.getOrNull()
         }
