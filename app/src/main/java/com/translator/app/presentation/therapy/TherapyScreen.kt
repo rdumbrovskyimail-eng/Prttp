@@ -3,6 +3,7 @@ package com.translator.app.presentation.therapy
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable // <-- Добавлен недостающий импорт для сборки анимации
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -59,7 +60,7 @@ data class TherapyUiState(
     val crisis: CrisisLevel = CrisisLevel.None,
     val crisisReason: String = "",
     val lastCaption: String = "",
-    // Текущий статус операции ИИ в реальном времени (поле должно присутствовать здесь)
+    // Текущий статус операции ИИ в реальном времени
     val activeActionStatus: String = ""
 )
 
