@@ -18,6 +18,7 @@
 package com.prttp.app.therapy
 
 import com.prttp.app.data.PatientRepository
+import com.prttp.app.data.PexelsImageRepository
 import com.prttp.app.domain.ToolResponse
 import com.prttp.app.domain.model.FunctionCall
 import com.prttp.app.domain.model.RiskLevel
@@ -26,11 +27,14 @@ import javax.inject.Singleton
 
 @Singleton
 class TherapistToolHandler @Inject constructor(
-    private val repo: PatientRepository
+    private val repo: PatientRepository,
+    private val pexels: PexelsImageRepository
 ) {
 
     /** Колбэк наружу: UI может среагировать на кризисный флаг (показать ресурсы). */
     var onCrisisFlag: ((RiskLevel, String) -> Unit)? = null
+    var onShowImage: ((String, String) -> Unit)? = null   // (query, caption)
+    var pexelsApiKey: String = ""
 
     suspend fun handle(calls: List<FunctionCall>): List<ToolResponse> =
         calls.map { call ->
@@ -119,6 +123,14 @@ class TherapistToolHandler @Inject constructor(
                         "[$sender]: ${msg.text}"
                     }
                 }
+            }
+
+            ToolName.SHOW_IMAGE -> {
+                val query   = a.str("query").ifBlank { "calm nature peaceful" }
+                val caption = a.str("caption").ifBlank { "" }
+                // Запускаем загрузку асинхронно — не блокируем ответ ИИ
+                onShowImage?.invoke(query, caption)
+                "ok: image requested"
             }
 
             else -> "error: unknown tool ${call.name}"
