@@ -159,11 +159,35 @@ class PatientRepository @Inject constructor(
     }
 
     suspend fun clearFlag(id: String) = mutateProfile { p ->
-        p.copy(flags = p.flags.map { if (it.id == id) it.copy(active = false) else it })
+        p.copy(flags = p.flags.map {
+            if (it.id == id) it.copy(active = false, resolvedAt = System.currentTimeMillis()) else it
+        })
     }
 
+    /** Вызвать в начале каждой сессии. Инкрементирует счётчик, генерирует UUID. */
+    suspend fun startNewSession(): String = writeMutex.withLock {
+        val newId = java.util.UUID.randomUUID().toString()
+        val updated = _profile.value.copy(
+            sessionCount = _profile.value.sessionCount + 1,
+            currentSessionId = newId,
+            updatedAt = System.currentTimeMillis()
+        )
+        _profile.value = updated
+        withContext(Dispatchers.IO) { persistProfile(updated) }
+        newId
+    }
+
+    fun getSessionCount(): Int = _profile.value.sessionCount
+    fun getCurrentSessionId(): String = _profile.value.currentSessionId
+
     suspend fun addMessage(role: String, text: String) = mutateProfile { p ->
-        p.copy(messages = p.messages + ConversationMessage(role, text))
+        val msg = ConversationMessage(
+            role = role,
+            text = text,
+            sessionId = p.currentSessionId,
+            timestamp = System.currentTimeMillis()
+        )
+        p.copy(messages = (p.messages + msg).takeLast(200))
     }
 
     suspend fun addJournalEntry(text: String, mood: Int?, tags: List<String>) = mutateJournal { list ->
