@@ -269,6 +269,37 @@ fun SettingsScreen(
                     onChange = { v -> viewModel.update { copy(autoRotateKeys = v) } }
                 )
 
+                // ── Pexels API Key ──
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "Визуальная терапия (Pexels)",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = s.pexelsApiKey,
+                    onValueChange = { viewModel.update { copy(pexelsApiKey = it) } },
+                    label = { Text("Pexels API Key") },
+                    placeholder = { Text("Получить бесплатно на pexels.com/api") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Switch(
+                        checked = s.therapyImagesEnabled,
+                        onCheckedChange = { viewModel.update { copy(therapyImagesEnabled = it) } }
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Показывать терапевтические изображения", fontSize = 13.sp)
+                }
+
                 // ─── 1.5. MODEL (ВЫБОР И ПРОВЕРКА) ───
                 SectionTitle("Модель Gemini")
                 
