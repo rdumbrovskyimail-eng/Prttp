@@ -33,11 +33,14 @@ object ProfileCategory {
     const val EMOTIONAL_BLOCK    = "emotional_block"    // Подавленные чувства и зоны заблокированного аффекта
     const val COPING_STRATEGY    = "coping_strategy"    // Адаптивные ресурсы и копинг-механизмы
     const val THERAPEUTIC_GOAL   = "therapeutic_goal"   // Цели терапии
+    const val SCHEMA_MODE        = "schema_mode"
+    const val DISSOCIATION       = "dissociation"
 
     val ALL = listOf(
         PRESENTING_CONCERN, HISTORY, SYMPTOM, TRIGGER, CORE_BELIEF,
-        COGNITIVE_STYLE, DEFENSE_MECHANISM, MALADAPTIVE_SCHEMA,
-        BEHAVIOR_PATTERN, EMOTIONAL_BLOCK, COPING_STRATEGY, THERAPEUTIC_GOAL
+        COGNITIVE_STYLE, DEFENSE_MECHANISM, MALADAPTIVE_SCHEMA, SCHEMA_MODE,
+        BEHAVIOR_PATTERN, EMOTIONAL_BLOCK, COPING_STRATEGY, THERAPEUTIC_GOAL,
+        DISSOCIATION
     )
 }
 
@@ -51,6 +54,8 @@ data class PatientProfile(
     val homework: List<Homework> = emptyList(),
     val flags: List<ClinicalFlag> = emptyList(),
     val messages: List<ConversationMessage> = emptyList(),
+    val sessionCount: Int = 0,
+    val currentSessionId: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {
@@ -58,6 +63,14 @@ data class PatientProfile(
 
     val activeRisk: ClinicalFlag?
         get() = flags.filter { it.active }.maxByOrNull { it.level.severity }
+
+    val previousSessionMessages: List<ConversationMessage>
+        get() {
+            val prevId = messages.map { it.sessionId }
+                .filter { it.isNotBlank() && it != currentSessionId }
+                .lastOrNull() ?: return emptyList()
+            return messages.filter { it.sessionId == prevId }
+        }
 }
 
 @Serializable
@@ -112,5 +125,6 @@ data class ClinicalFlag(
     val level: RiskLevel,
     val reason: String,
     val active: Boolean = true,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val resolvedAt: Long? = null
 )
