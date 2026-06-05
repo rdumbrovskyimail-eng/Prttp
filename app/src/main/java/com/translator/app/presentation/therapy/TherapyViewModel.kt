@@ -33,6 +33,7 @@ import com.translator.app.domain.AudioEngine
 import com.translator.app.domain.LiveClient
 import com.translator.app.domain.model.GeminiEvent
 import com.translator.app.domain.model.RiskLevel
+import com.translator.app.domain.model.SessionConfig
 import com.translator.app.therapy.TherapistSession
 import com.translator.app.therapy.TherapistToolHandler
 import com.translator.app.util.AppLogger
@@ -171,7 +172,7 @@ class TherapyViewModel @Inject constructor(
             model = cachedSettings.model
         )
         val handle = if (freshSession) null else liveClient.sessionHandle
-        val config = base.copy(sessionHandle = handle)
+        val config: SessionConfig = base.copy(sessionHandle = handle)
 
         runCatching {
             liveClient.connect(activeApiKey, config, logRaw = cachedSettings.logRawWebSocketFrames)
