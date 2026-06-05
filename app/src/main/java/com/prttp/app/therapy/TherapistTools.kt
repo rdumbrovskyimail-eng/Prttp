@@ -114,30 +114,28 @@ object TherapistTools {
             }
         ))
 
-        add(buildJsonObject {
-            put("name", ToolName.SHOW_IMAGE)
-            put("description", "Показать пациенту терапевтическое изображение. " +
-                "Вызывай когда используешь технику заземления, визуализации безопасного места, " +
-                "дыхательных упражнений или позитивного образа. " +
-                "НЕ вызывай при работе с травмой, во время плача или кризиса.")
-            put("parameters", buildJsonObject {
-                put("type", "object")
-                put("properties", buildJsonObject {
-                    put("query", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Поисковый запрос на английском для Pexels. " +
-                            "Примеры: 'calm ocean waves', 'misty forest peaceful', " +
-                            "'warm sunlight meadow', 'cozy reading nook', 'mountain sunrise'")
-                    })
-                    put("caption", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Краткая подпись на русском (1-2 слова) для пациента. " +
-                            "Примеры: 'Представь это место', 'Здесь безопасно', 'Дыши вместе с волнами'")
-                    })
-                })
-                put("required", buildJsonArray { add("query"); add("caption") })
-            })
-        })
+        add(decl(
+            name = ToolName.SHOW_IMAGE,
+            description = "Показать пациенту терапевтическое изображение. " +
+                "Вызывай при технике заземления, визуализации безопасного места, " +
+                "дыхательных упражнениях, позитивном образе. " +
+                "НЕ вызывай во время проработки травмы, острого плача или кризиса.",
+            params = {
+                strParam(
+                    "query",
+                    "Поисковый запрос на английском для Pexels. " +
+                    "Примеры: 'calm ocean waves', 'misty forest peaceful', " +
+                    "'warm sunlight meadow', 'cozy reading nook', 'mountain sunrise path'",
+                    true
+                )
+                strParam(
+                    "caption",
+                    "Подпись на русском для пациента (1-5 слов). " +
+                    "Примеры: 'Представь это место', 'Здесь безопасно', 'Дыши вместе с волнами'",
+                    true
+                )
+            }
+        ))
     }
 
     private inline fun decl(
