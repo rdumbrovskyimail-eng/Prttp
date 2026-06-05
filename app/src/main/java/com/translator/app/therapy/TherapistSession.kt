@@ -1,19 +1,3 @@
-// Путь: app/src/main/java/com/translator/app/therapy/TherapistSession.kt
-//
-// «Мозг» пси-ассистента: системная инструкция + сборка SessionConfig.
-//
-// КЛЮЧЕВАЯ ИДЕЯ «мгновенно считывает базу при каждом подключении»:
-//   при каждом connect() мы инжектим актуальный профиль + свежие записи
-//   дневника прямо в systemInstruction. Это дёшево и моментально — модель
-//   видит контекст пациента с первой секунды, без round-trip'а на чтение.
-//   Для глубоких деталей у неё дополнительно есть read-инструменты.
-//
-// Конфиг сознательно ОТЛИЧАЕТСЯ от переводчика:
-//   • thinkingLevel выше (нужно клиническое рассуждение, не скорость);
-//   • temperature умеренная (живая, но не разболтанная речь);
-//   • barge-in мягкий, длинные паузы разрешены (человек думает/плачет);
-//   • toolsJson подключён.
-// ═══════════════════════════════════════════════════════════════════════════
 package com.translator.app.therapy
 
 import com.translator.app.domain.model.JournalEntry
@@ -26,14 +10,6 @@ import java.util.Locale
 
 object TherapistSession {
 
-    /**
-     * Собирает конфиг сессии ассистента.
-     *
-     * @param profile текущий профиль (инжектится в промпт)
-     * @param recentJournal последние записи дневника (инжектятся в промпт)
-     * @param voiceId голос (можно дать тёплый — напр. "Aoede"/"Kore")
-     * @param model id модели Live
-     */
     fun buildConfig(
         profile: PatientProfile,
         recentJournal: List<JournalEntry>,
@@ -42,22 +18,18 @@ object TherapistSession {
     ): SessionConfig = SessionConfig(
         model = model,
         responseModality = "AUDIO",
-        // Живо, эмпатично, но не выдумчиво.
-        temperature = 0.6f,
+        // Умеренная температура для баланса между эмпатичной живостью и строгим клиническим ведением
+        temperature = 0.55f,
         topP = 0.95f,
-        // Голос терапевта длиннее реплики переводчика — даём запас.
         maxOutputTokens = 8192,
         voiceId = voiceId,
 
-        // ВАЖНО (доки 3.1 Live, июнь 2026): function calling СИНХРОННЫЙ —
-        // модель замирает, пока ждёт ответа инструмента. Чтобы голос не «тормозил»
-        // на каждый вызов update_profile/log_mood, держим лёгкое «мышление» (Low):
-        // отзывчиво в живом разговоре, но всё ещё с клиническим рассуждением.
-        // Для более глубокого анализа можно поднять до Balanced ценой задержки.
-        latencyProfile = LatencyProfile.Low,
+        // Переводим ИИ на профиль Balanced (thinkingLevel = "medium").
+        // Модель берет паузу перед ответом для глубокого анализа дезадаптивных схем и когнитивного стиля.
+        latencyProfile = LatencyProfile.Balanced,
         thinkingIncludeThoughts = false,
 
-        // VAD: человек делает паузы, молчит, плачет — НЕ перебиваем агрессивно.
+        // VAD настройки, препятствующие агрессивному перебиванию терапевта во время пауз пациента
         autoActivityDetection = true,
         vadStartSensitivity = "START_SENSITIVITY_LOW",
         vadEndSensitivity = "END_SENSITIVITY_LOW",
@@ -74,58 +46,51 @@ object TherapistSession {
         enableSessionResumption = true,
         enableContextCompression = true,
 
-        // ПОДКЛЮЧЕНИЕ ИНСТРУМЕНТОВ (см. патч SessionConfig + buildFullSetup
-        // в TherapistTools.kt). Поле добавляется в SessionConfig.
         toolsJson = TherapistTools.declarations()
     )
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  СИСТЕМНАЯ ИНСТРУКЦИЯ
-    // ─────────────────────────────────────────────────────────────────────
-
     private fun buildSystemInstruction(
         profile: PatientProfile,
-        journal: List<JournalEntry>
+        recentJournal: List<JournalEntry>
     ): String = buildString {
-        append(TherapistClinicalCore.PROMPT)   // усиленный клинический промпт
+        append(TherapistClinicalCore.PROMPT)
         append("\n\n")
-        append(renderProfile(profile))         // память пациента — инжект
+        append(renderProfile(profile))
         append("\n\n")
-        append(renderJournal(journal))         // дневник — инжект
+        append(renderJournal(recentJournal))
     }
-
 
     private fun renderProfile(p: PatientProfile): String {
         if (p.facts.isEmpty() && p.sessionNotes.isEmpty() && p.openHomework.isEmpty() &&
             p.displayName.isBlank() && p.moodLogs.isEmpty()
         ) {
-            return "═══ ПРОФИЛЬ ПАЦИЕНТА ═══\n(Пусто — это первая встреча. Начни с тёплого знакомства, " +
-                "узнай, как к человеку обращаться и что привело.)"
+            return "═══ ПРОФИЛЬ ПАЦИЕНТА ═══\n(Карта пуста — это первая встреча. " +
+                "Узнай имя пациента и проведи первичное бережное знакомство. Зафиксируй запрос.)"
         }
         return buildString {
-            append("═══ ПРОФИЛЬ ПАЦИЕНТА (твоя память) ═══\n")
-            if (p.displayName.isNotBlank()) append("Обращение: ${p.displayName}\n")
+            append("═══ ТЕРАПЕВТИЧЕСКАЯ КАРТА ПАЦИЕНТА (твоя память) ═══\n")
+            if (p.displayName.isNotBlank()) append("Имя пациента: ${p.displayName}\n")
 
             if (p.facts.isNotEmpty()) {
-                append("\nФакты:\n")
-                p.facts.sortedByDescending { it.updatedAt }.take(40).forEach {
-                    append("• [${it.category}] ${it.key}: ${it.value}\n")
+                append("\nВыявленная структура личности (факты и гипотезы):\n")
+                p.facts.sortedByDescending { it.updatedAt }.take(45).forEach {
+                    append("• [${it.category.uppercase()}] ${it.key}: ${it.value}\n")
                 }
             }
             p.activeRisk?.let {
-                append("\n⚠ Активный клинический флаг: ${it.level} — ${it.reason}\n")
+                append("\n⚠ АКТИВНЫЙ РИСК: ${it.level} — ${it.reason}\n")
             }
             if (p.openHomework.isNotEmpty()) {
-                append("\nОткрытые домашние задания (спроси, как с ними):\n")
-                p.openHomework.forEach { append("• (${it.id}) ${it.title}\n") }
+                append("\nТекущие домашние задания (узнай, как успехи):\n")
+                p.openHomework.forEach { append("• (${it.id}) ${it.title}: ${it.detail}\n") }
             }
             if (p.moodLogs.isNotEmpty()) {
-                val recent = p.moodLogs.takeLast(5).joinToString(", ") { "${it.score}/10" }
-                append("\nПоследние замеры настроения: $recent\n")
+                val recent = p.moodLogs.takeLast(7).joinToString(", ") { "${it.score}/10" }
+                append("\nДинамика настроения (последние сессии): $recent\n")
             }
             if (p.sessionNotes.isNotEmpty()) {
                 append("\nИтоги прошлых встреч:\n")
-                p.sessionNotes.takeLast(4).forEach {
+                p.sessionNotes.takeLast(5).forEach {
                     append("• ${fmt(it.createdAt)}: ${it.summary}\n")
                 }
             }
@@ -133,15 +98,15 @@ object TherapistSession {
     }
 
     private fun renderJournal(journal: List<JournalEntry>): String {
-        if (journal.isEmpty()) return "═══ ДНЕВНИК ═══\n(Записей пока нет.)"
+        if (journal.isEmpty()) return "═══ ЛИЧНЫЙ ДНЕВНИК ПАЦИЕНТА ═══\n(Записей пока нет.)"
         return buildString {
-            append("═══ ДНЕВНИК ПАЦИЕНТА (его собственные записи, недавние) ═══\n")
-            journal.sortedByDescending { it.createdAt }.take(7).forEach { e ->
+            append("═══ ЛИЧНЫЙ ДНЕВНИК ПАЦИЕНТА (его мысли между сессиями) ═══\n")
+            journal.sortedByDescending { it.createdAt }.take(8).forEach { e ->
                 val mood = e.mood?.let { " (настроение $it/10)" } ?: ""
-                append("• ${fmt(e.createdAt)}$mood: ${e.text.take(400)}\n")
+                append("• ${fmt(e.createdAt)}$mood: ${e.text.take(350)}\n")
             }
-            append("\nОпирайся на дневник бережно: ссылайся на то, что человек сам написал, " +
-                "но не цитируй дословно без нужды и не превращай это в проверку.")
+            append("\nИспользуй эти записи аккуратно: мягко сошлись на них, если тема " +
+                "подходит к диалогу, но не устраивай допрос по написанному.")
         }
     }
 
