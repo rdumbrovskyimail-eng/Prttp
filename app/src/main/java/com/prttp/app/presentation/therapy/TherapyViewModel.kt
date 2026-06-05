@@ -110,6 +110,7 @@ class TherapyViewModel @Inject constructor(
 
     fun startSession() {
         if (connected || _state.value.phase == TherapyPhase.Connecting) return
+        _state.update { it.copy(phase = TherapyPhase.Connecting) }
         viewModelScope.launch {
             val settings = settingsStore.data.first()
             cachedSettings = settings
@@ -119,7 +120,7 @@ class TherapyViewModel @Inject constructor(
             }
             repo.startNewSession()
             activeApiKey = settings.apiKey
-            _state.update { it.copy(phase = TherapyPhase.Connecting, sessionCount = repo.getSessionCount()) }
+            _state.update { it.copy(sessionCount = repo.getSessionCount()) }
 
             audioEngine.setPlaybackVolume(settings.playbackVolume / 100f)
             audioEngine.setMicGain(settings.micGain / 100f)
@@ -255,6 +256,7 @@ class TherapyViewModel @Inject constructor(
                 "read_recent_journal" -> "⚡ Чтение дневника за ${cleanArgs["days"] ?: "14"} дн."
                 "read_full_profile" -> "⚡ Анализ всей терапевтической карты"
                 "read_dialogue_history" -> "⚡ Анализ архива: чтение последних ${cleanArgs["limit"] ?: "30"} реплик диалога"
+                "show_therapeutic_image" -> "🖼 Образ: ${cleanArgs["query"]?.take(30) ?: ""}"
                 else -> "⚡ Вызов: ${call.name}"
             }
         }
@@ -472,6 +474,7 @@ class TherapyViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         toolHandler.onCrisisFlag = null
+        toolHandler.onShowImage = null
         endSession()
     }
 }
