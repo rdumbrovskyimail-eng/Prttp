@@ -452,24 +452,29 @@ class TherapyViewModel @Inject constructor(
 
     private fun loadTherapyImage(query: String, caption: String) {
         viewModelScope.launch {
-            // Проверяем что фичя включена и ключ задан
             val settings = settingsStore.data.first()
-            if (!settings.therapyImagesEnabled || settings.pexelsApiKey.isBlank()) return@launch
 
+            if (!settings.therapyImagesEnabled) {
+                logger.w("IMG: показ изображений выключен"); return@launch
+            }
+            if (settings.pexelsApiKey.isBlank()) {
+                logger.w("IMG: pexelsApiKey пуст")
+                _state.update { it.copy(lastCaption = "Добавь ключ Pexels в настройках") }
+                return@launch
+            }
+
+            logger.d("IMG show: query='$query'")
             _state.update { it.copy(imageLoading = true) }
 
             val theme = repo.getImageTheme()
-            val image = pexels.fetchImage(
-                apiKey  = settings.pexelsApiKey,
-                query   = query,
-                caption = caption,
-                theme   = theme
-            )
+            val image = runCatching {
+                pexels.fetchImage(settings.pexelsApiKey, query, caption, theme)
+            }.onFailure { logger.e("IMG: Pexels error: ${it.message}", it) }.getOrNull()
 
+            logger.d("IMG result: url=${image?.url ?: "NULL"}")
             _state.update { it.copy(therapyImage = image, imageLoading = false, currentImageTheme = theme) }
 
             if (image != null) {
-                // Авто-сброс через 40 секунд
                 imageDismissJob?.cancel()
                 imageDismissJob = viewModelScope.launch {
                     kotlinx.coroutines.delay(40_000L)
