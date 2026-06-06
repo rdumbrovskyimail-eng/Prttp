@@ -70,11 +70,12 @@ class TherapyViewModel @Inject constructor(
     private val sessionMutex = Mutex()
 
     companion object {
-        private const val STUCK_TURN_TIMEOUT_MS = 60_000L
-        private const val RESPONSE_TIMEOUT_MS   = 45_000L
+        private const val STUCK_TURN_TIMEOUT_MS = 90_000L
+        private const val RESPONSE_TIMEOUT_MS   = 60_000L
     }
 
     private val lastSeenTurnId = AtomicLong(Long.MIN_VALUE)
+    private val lastAiAudioChunkAtMs = AtomicLong(0L)
     private val hasModelOutputThisTurn = AtomicBoolean(false)
     private val networkLost = AtomicBoolean(false)
 
@@ -298,15 +299,20 @@ class TherapyViewModel @Inject constructor(
     private fun startStuckTurnWatchdog() {
         stuckTurnWatchdogJob?.cancel()
         stuckTurnWatchdogJob = viewModelScope.launch {
-            delay(STUCK_TURN_TIMEOUT_MS)
-            if (_state.value.phase == TherapyPhase.AssistantSpeaking) {
-                logger.w("stuckTurnWatchdog: TurnComplete не пришёл за ${STUCK_TURN_TIMEOUT_MS}ms")
-                runCatching { audioEngine.flushPlayback() }
-                runCatching { audioEngine.onTurnComplete() }
-                hasModelOutputThisTurn.set(false)
-                lastSeenTurnId.set(Long.MIN_VALUE)
-                saveAccumulatedTurnMessages()
-                if (connected) _state.update { it.copy(phase = TherapyPhase.Listening, lastCaption = "") }
+            while (true) {
+                delay(5000L)
+                val last = lastAiAudioChunkAtMs.get()
+                if (last > 0 && (System.currentTimeMillis() - last) > STUCK_TURN_TIMEOUT_MS) {
+                    logger.w("stuckTurnWatchdog: TurnComplete не пришёл за ${STUCK_TURN_TIMEOUT_MS}ms")
+                    runCatching { audioEngine.flushPlayback() }
+                    runCatching { audioEngine.onTurnComplete() }
+                    hasModelOutputThisTurn.set(false)
+                    lastSeenTurnId.set(Long.MIN_VALUE)
+                    lastAiAudioChunkAtMs.set(0L)
+                    saveAccumulatedTurnMessages()
+                    if (connected) _state.update { it.copy(phase = TherapyPhase.Listening, lastCaption = "") }
+                    break
+                }
             }
         }
     }
@@ -339,6 +345,7 @@ class TherapyViewModel @Inject constructor(
                         if (event.turnId < lastSeenTurnId.get()) return@collect
                         if (event.turnId > lastSeenTurnId.get()) lastSeenTurnId.set(event.turnId)
                         audioEngine.enqueuePlayback(event.pcmData)
+                        lastAiAudioChunkAtMs.set(System.currentTimeMillis())
                         if (hasModelOutputThisTurn.compareAndSet(false, true)) {
                             startStuckTurnWatchdog()
                             responseTimeoutJob?.cancel()
@@ -380,6 +387,7 @@ class TherapyViewModel @Inject constructor(
                         runCatching { audioEngine.flushPlayback() }
                         hasModelOutputThisTurn.set(false)
                         lastSeenTurnId.set(Long.MIN_VALUE)
+                        lastAiAudioChunkAtMs.set(0L)
                         if (connected) _state.update { it.copy(phase = TherapyPhase.Listening) }
                         saveAccumulatedTurnMessages()
                     }
@@ -390,6 +398,7 @@ class TherapyViewModel @Inject constructor(
                         audioEngine.onTurnComplete()
                         hasModelOutputThisTurn.set(false)
                         lastSeenTurnId.set(Long.MIN_VALUE)
+                        lastAiAudioChunkAtMs.set(0L)
                         if (connected) _state.update { it.copy(phase = TherapyPhase.Listening, lastCaption = "") }
                         saveAccumulatedTurnMessages()
                     }
