@@ -27,12 +27,12 @@ class WebResearchRepository @Inject constructor(
 ) {
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(40, TimeUnit.SECONDS)
         .build()
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     companion object {
-        const val GROUNDING_MODEL = "gemini-2.5-flash"
+        const val GROUNDING_MODEL = "gemini-3.5-flash"
     }
 
     suspend fun research(apiKey: String, query: String, model: String = GROUNDING_MODEL): ResearchResult? {
@@ -59,10 +59,20 @@ class WebResearchRepository @Inject constructor(
                     .post(body.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
-                val raw = http.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) { logger.w("research HTTP ${resp.code}"); return@use null }
-                    resp.body?.string()
-                } ?: return@runCatching null
+                var raw: String? = null
+                var attempt = 0
+                while (attempt <= 2) {
+                    val (code, body) = http.newCall(req).execute().use { it.code to it.body?.string() }
+                    if (code in 200..299) { raw = body; break }
+                    if (code == 429 || code == 500 || code == 503) {
+                        attempt++
+                        logger.w("research HTTP $code — ретрай $attempt")
+                        kotlinx.coroutines.delay(900L * attempt)
+                        continue
+                    }
+                    logger.w("research HTTP $code — отказ"); break
+                }
+                if (raw == null) return@runCatching null
                 parse(raw)
             }.onFailure { logger.e("research error: ${it.message}", it) }.getOrNull()
         }
