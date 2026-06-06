@@ -169,8 +169,7 @@ fun SettingsScreen(
     
     val PREDEFINED_MODELS = listOf(
         "gemini-3.1-flash-live-preview",
-        "gemini-2.0-flash-exp",
-        "gemini-2.0-pro-exp"
+        "gemini-2.5-flash-native-audio-preview-12-2025"
     )
     // -----------------------------------
 

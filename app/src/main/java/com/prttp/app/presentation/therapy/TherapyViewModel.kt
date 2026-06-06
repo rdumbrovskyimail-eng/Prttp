@@ -26,9 +26,14 @@ import com.prttp.app.therapy.TherapistToolHandler
 import com.prttp.app.util.AppLogger
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -392,10 +397,12 @@ class TherapyViewModel @Inject constructor(
                         val permanent = event.code in setOf(1008, 4001, 4003)
                         val graceful = event.code == 1000 || event.code == 1001
                         if (permanent) {
+                            stopForegroundServiceSafe()
                             _state.update { it.copy(phase = TherapyPhase.Idle, lastCaption = "Связь прервана (${event.code}).") }
                         } else if (!graceful) {
                             scheduleReconnect()
                         } else {
+                            stopForegroundServiceSafe()
                             _state.update { it.copy(phase = TherapyPhase.Idle) }
                         }
                     }
@@ -475,6 +482,12 @@ class TherapyViewModel @Inject constructor(
         super.onCleared()
         toolHandler.onCrisisFlag = null
         toolHandler.onShowImage = null
-        endSession()
+        viewModelScope.launch {
+            withContext(NonCancellable) {
+                withTimeoutOrNull(2000L) {
+                    endSession()
+                }
+            }
+        }
     }
 }

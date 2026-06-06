@@ -67,29 +67,17 @@ class AppSettingsSerializer @Inject constructor() : Serializer<AppSettings> {
         }
     }
 
-    private suspend fun writeInternal(t: AppSettings, output: OutputStream, isRetry: Boolean = false) {
-        try {
-            val plain = json.encodeToString(AppSettings.serializer(), t).encodeToByteArray()
-            val key = getOrCreateKey()
-            val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key) }
-            val iv = cipher.iv
-            val ciphertext = cipher.doFinal(plain)
-
-            val out = ByteArrayOutputStream(HEADER_SIZE + ciphertext.size).apply {
-                write(MAGIC.toInt()); write(VERSION); write(iv); write(ciphertext)
-            }
-            output.write(out.toByteArray())
-        } catch (e: Exception) {
-            if (!isRetry) {
-                val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-                runCatching { ks.deleteEntry(KEY_ALIAS) }
-                writeInternal(t, output, isRetry = true)
-            }
-        }
-    }
-
     override suspend fun writeTo(t: AppSettings, output: OutputStream) {
-        writeInternal(t, output)
+        val plain = json.encodeToString(AppSettings.serializer(), t).encodeToByteArray()
+        val key = getOrCreateKey()
+        val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key) }
+        val iv = cipher.iv
+        val ciphertext = cipher.doFinal(plain)
+
+        val out = ByteArrayOutputStream(HEADER_SIZE + ciphertext.size).apply {
+            write(MAGIC.toInt()); write(VERSION); write(iv); write(ciphertext)
+        }
+        output.write(out.toByteArray())
     }
 
     private fun getOrCreateKey(): SecretKey {

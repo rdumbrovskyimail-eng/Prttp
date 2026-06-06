@@ -41,12 +41,9 @@ jobs:
 
       - name: Build Debug APK
         run: |
-          gradle assembleDebug \
+          ./gradlew assembleDebug \
             --parallel \
-            --max-workers=4 \
-            -Dorg.gradle.jvmargs="-Xmx4g -XX:+UseG1GC -XX:MaxMetaspaceSize=512m" \
-            -Dorg.gradle.parallel=true \
-            -Dandroid.enableJetifier=false
+            --max-workers=4
 
       - name: Calculate APK Size
         id: pack
