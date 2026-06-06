@@ -35,8 +35,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
@@ -79,8 +83,18 @@ fun TherapyScreen(
     onOpenResources: () -> Unit,
     onDismissImage: () -> Unit,
     onThemeChange: (ImageTheme) -> Unit,
+    onScreenResumed: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, e ->
+            if (e == Lifecycle.Event.ON_RESUME) onScreenResumed()
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+
     val bg = Brush.verticalGradient(
         listOf(Color(0xFF0E1A24), Color(0xFF132A2E), Color(0xFF0E1A24))
     )
