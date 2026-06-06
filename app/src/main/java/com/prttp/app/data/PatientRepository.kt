@@ -10,6 +10,7 @@ import com.prttp.app.domain.model.JournalEntry
 import com.prttp.app.domain.model.MoodLog
 import com.prttp.app.domain.model.PatientProfile
 import com.prttp.app.domain.model.ProfileFact
+import com.prttp.app.domain.model.ResearchNote
 import com.prttp.app.domain.model.RiskLevel
 import com.prttp.app.domain.model.SessionNote
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -48,6 +49,10 @@ class PatientRepository @Inject constructor(
     private val _journal = MutableStateFlow<List<JournalEntry>>(emptyList())
     val journal: StateFlow<List<JournalEntry>> = _journal.asStateFlow()
 
+    private val researchFile: File get() = File(context.filesDir, "research.bin")
+    private val _research = MutableStateFlow<List<ResearchNote>>(emptyList())
+    val research: StateFlow<List<ResearchNote>> = _research.asStateFlow()
+
     // Триггер ожидания первичной расшифровки
     private val isLoaded = CompletableDeferred<Unit>()
 
@@ -61,6 +66,7 @@ class PatientRepository @Inject constructor(
     private suspend fun load() = withContext(Dispatchers.IO) {
         _profile.value = readProfile()
         _journal.value = readJournal()
+        _research.value = readResearch()
     }
 
     suspend fun getProfile(): PatientProfile {
@@ -203,19 +209,57 @@ class PatientRepository @Inject constructor(
         list.filterNot { it.id == id }
     }
 
+    suspend fun getResearchNotes(): List<ResearchNote> { isLoaded.await(); return _research.value }
+
+    private fun readResearch(): List<ResearchNote> {
+        if (!researchFile.exists()) return emptyList()
+        val blob = runCatching { researchFile.readBytes() }.getOrNull() ?: return emptyList()
+        val plain = KeystoreCrypto.decrypt(KEY_RESEARCH, blob) ?: return emptyList()
+        return runCatching {
+            json.decodeFromString(ListSerializer(ResearchNote.serializer()), plain.decodeToString())
+        }.getOrDefault(emptyList())
+    }
+
+    private fun persistResearch(list: List<ResearchNote>) {
+        val bytes = json.encodeToString(ListSerializer(ResearchNote.serializer()), list).encodeToByteArray()
+        researchFile.writeBytes(KeystoreCrypto.encrypt(KEY_RESEARCH, bytes))
+    }
+
+    private suspend fun mutateResearch(block: (List<ResearchNote>) -> List<ResearchNote>) =
+        writeMutex.withLock {
+            withContext(Dispatchers.IO) {
+                isLoaded.await()
+                val updated = block(_research.value)
+                persistResearch(updated)
+                _research.value = updated
+            }
+        }
+
+    suspend fun addResearchNote(query: String, topic: String, summary: String, sources: List<String>) =
+        mutateResearch { list ->
+            (list + ResearchNote(
+                id = UUID.randomUUID().toString(),
+                query = query, topic = topic, summary = summary, sources = sources
+            )).takeLast(200)
+        }
+
     suspend fun wipeEverything() = writeMutex.withLock {
         withContext(Dispatchers.IO) {
             runCatching { profileFile.delete() }
             runCatching { journalFile.delete() }
+            runCatching { researchFile.delete() }
             KeystoreCrypto.deleteKey(KEY_PROFILE)
             KeystoreCrypto.deleteKey(KEY_JOURNAL)
+            KeystoreCrypto.deleteKey(KEY_RESEARCH)
             _profile.value = PatientProfile()
             _journal.value = emptyList()
+            _research.value = emptyList()
         }
     }
 
     companion object {
         private const val KEY_PROFILE = "patient_profile_key_v1"
         private const val KEY_JOURNAL = "patient_journal_key_v1"
+        private const val KEY_RESEARCH = "patient_research_key_v1"
     }
 }

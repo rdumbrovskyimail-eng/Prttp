@@ -19,6 +19,7 @@ package com.prttp.app.therapy
 
 import com.prttp.app.data.PatientRepository
 import com.prttp.app.data.PexelsImageRepository
+import com.prttp.app.data.WebResearchRepository
 import com.prttp.app.domain.ToolResponse
 import com.prttp.app.domain.model.FunctionCall
 import com.prttp.app.domain.model.RiskLevel
@@ -28,13 +29,16 @@ import javax.inject.Singleton
 @Singleton
 class TherapistToolHandler @Inject constructor(
     private val repo: PatientRepository,
-    private val pexels: PexelsImageRepository
+    private val pexels: PexelsImageRepository,
+    private val web: WebResearchRepository
 ) {
 
     /** Колбэк наружу: UI может среагировать на кризисный флаг (показать ресурсы). */
     var onCrisisFlag: ((RiskLevel, String) -> Unit)? = null
     var onShowImage: ((String, String) -> Unit)? = null   // (query, caption)
+    var onResearch: ((String) -> Unit)? = null            // (query) → показать табличку
     var pexelsApiKey: String = ""
+    var geminiApiKey: String = ""
 
     suspend fun handle(calls: List<FunctionCall>): List<ToolResponse> =
         calls.map { call ->
@@ -131,6 +135,23 @@ class TherapistToolHandler @Inject constructor(
                 // Запускаем загрузку асинхронно — не блокируем ответ ИИ
                 onShowImage?.invoke(query, caption)
                 "ok: image requested"
+            }
+
+            ToolName.WEB_RESEARCH -> {
+                val query = a.str("query")
+                val topic = a.str("topic")
+                if (query.isBlank()) return "error: query missing"
+                onResearch?.invoke(query)                       // UI: «Ищу в интернете, изучаю…»
+                val result = web.research(geminiApiKey, query)
+                    ?: return "Не удалось найти данные в интернете по запросу: $query"
+                repo.addResearchNote(query, topic, result.summary, result.sources)
+                buildString {
+                    append(result.summary.take(1500))
+                    if (result.sources.isNotEmpty()) {
+                        append("\n\nИсточники:\n")
+                        result.sources.take(4).forEach { append("• $it\n") }
+                    }
+                }
             }
 
             else -> "error: unknown tool ${call.name}"

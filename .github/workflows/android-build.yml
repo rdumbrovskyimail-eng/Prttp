@@ -41,9 +41,8 @@ jobs:
 
       - name: Build Debug APK
         run: |
-          ./gradlew assembleDebug \
-            --parallel \
-            --max-workers=4
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --parallel --max-workers=4 -Dorg.gradle.parallel=true
 
       - name: Calculate APK Size
         id: pack

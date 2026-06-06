@@ -31,6 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -43,9 +44,6 @@ import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
-
-private const val STUCK_TURN_TIMEOUT_MS = 45_000L
-private const val RESPONSE_TIMEOUT_MS   = 30_000L
 
 @HiltViewModel
 class TherapyViewModel @Inject constructor(
@@ -72,8 +70,8 @@ class TherapyViewModel @Inject constructor(
     private val sessionMutex = Mutex()
 
     companion object {
-        private const val STUCK_TURN_TIMEOUT_MS = 45_000L
-        private const val RESPONSE_TIMEOUT_MS   = 30_000L
+        private const val STUCK_TURN_TIMEOUT_MS = 60_000L
+        private const val RESPONSE_TIMEOUT_MS   = 45_000L
     }
 
     private val lastSeenTurnId = AtomicLong(Long.MIN_VALUE)
@@ -102,6 +100,10 @@ class TherapyViewModel @Inject constructor(
 
         toolHandler.onShowImage = { query, caption ->
             loadTherapyImage(query, caption)
+        }
+
+        toolHandler.onResearch = { q ->
+            _state.update { it.copy(activeActionStatus = "🔍 Ищу в интернете, изучаю: ${q.take(40)}…") }
         }
     }
 
@@ -133,6 +135,7 @@ class TherapyViewModel @Inject constructor(
             audioEngine.setUseAec(settings.useAec)
 
             toolHandler.pexelsApiKey = settings.pexelsApiKey
+            toolHandler.geminiApiKey = settings.apiKey
             startForegroundServiceSafe(settings.forceSpeakerOutput)
             runCatching { liveClient.resetSession() }
             connect(freshSession = true)
@@ -188,6 +191,7 @@ class TherapyViewModel @Inject constructor(
         val base = TherapistSession.buildConfig(
             profile = profile,
             recentJournal = journal,
+            researchNotes = repo.getResearchNotes(),
             voiceId = cachedSettings.voiceId,
             model = cachedSettings.model
         )
@@ -262,6 +266,7 @@ class TherapyViewModel @Inject constructor(
                 "read_full_profile" -> "⚡ Анализ всей терапевтической карты"
                 "read_dialogue_history" -> "⚡ Анализ архива: чтение последних ${cleanArgs["limit"] ?: "30"} реплик диалога"
                 "show_therapeutic_image" -> "🖼 Образ: ${cleanArgs["query"]?.take(30) ?: ""}"
+                "web_research" -> "🔍 Ищу в интернете, изучаю: ${cleanArgs["query"]?.take(40) ?: ""}"
                 else -> "⚡ Вызов: ${call.name}"
             }
         }
@@ -354,6 +359,7 @@ class TherapyViewModel @Inject constructor(
                     }
 
                     is GeminiEvent.ToolCall -> {
+                        responseTimeoutJob?.cancel()   // tool-call = модель работает
                         viewModelScope.launch {
                             val statusText = formatToolCalls(event.calls)
                             _state.update { it.copy(activeActionStatus = statusText) }
@@ -482,12 +488,23 @@ class TherapyViewModel @Inject constructor(
         super.onCleared()
         toolHandler.onCrisisFlag = null
         toolHandler.onShowImage = null
-        viewModelScope.launch {
-            withContext(NonCancellable) {
-                withTimeoutOrNull(2000L) {
-                    endSession()
+        toolHandler.onResearch = null
+        // viewModelScope к этому моменту уже отменён — иначе WS, микрофон и FGS текут.
+        CoroutineScope(Dispatchers.IO + NonCancellable).launch {
+            runCatching {
+                val u = accumulatedUserText.toString().trim()
+                val m = accumulatedModelText.toString().trim()
+                accumulatedUserText.clear(); accumulatedModelText.clear()
+                if (u.isNotEmpty()) repo.addMessage(ConversationMessage.ROLE_USER, u)
+                if (m.isNotEmpty()) repo.addMessage(ConversationMessage.ROLE_MODEL, m)
+                withTimeoutOrNull(1500L) {
+                    audioEngine.stopCapture()
+                    audioEngine.flushPlayback()
+                    liveClient.disconnect()
+                    liveClient.resetSession()
                 }
             }
+            stopForegroundServiceSafe()
         }
     }
 }

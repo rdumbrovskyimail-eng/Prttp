@@ -68,6 +68,8 @@ class AppSettingsSerializer @Inject constructor() : Serializer<AppSettings> {
     }
 
     override suspend fun writeTo(t: AppSettings, output: OutputStream) {
+        // Не ловим/не глотаем исключение и НЕ удаляем keystore-ключ: при сбое
+        // DataStore не подменит старый файл, прежние настройки/ключ уцелеют.
         val plain = json.encodeToString(AppSettings.serializer(), t).encodeToByteArray()
         val key = getOrCreateKey()
         val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key) }

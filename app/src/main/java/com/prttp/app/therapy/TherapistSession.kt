@@ -4,6 +4,7 @@ import com.prttp.app.domain.model.ConversationMessage
 import com.prttp.app.domain.model.JournalEntry
 import com.prttp.app.domain.model.LatencyProfile
 import com.prttp.app.domain.model.PatientProfile
+import com.prttp.app.domain.model.ResearchNote
 import com.prttp.app.domain.model.SessionConfig
 import com.prttp.app.therapy.TherapistSpecializations
 import java.text.SimpleDateFormat
@@ -15,6 +16,7 @@ object TherapistSession {
     fun buildConfig(
         profile: PatientProfile,
         recentJournal: List<JournalEntry>,
+        researchNotes: List<ResearchNote> = emptyList(),
         voiceId: String = "Aoede",
         model: String = SessionConfig.DEFAULT_MODEL
     ): SessionConfig = SessionConfig(
@@ -26,7 +28,7 @@ object TherapistSession {
         voiceId = voiceId,
 
         // Настройка Balanced (thinkingLevel = "medium") задействует клинические рассуждения ИИ перед ответом
-        latencyProfile = LatencyProfile.Balanced,
+        latencyProfile = LatencyProfile.Reasoning,
         thinkingIncludeThoughts = false,
 
         // VAD настройки, препятствующие прерыванию речи на естественных паузах пациента
@@ -38,7 +40,7 @@ object TherapistSession {
         activityHandling = "NO_INTERRUPTION",
         turnCoverage = "TURN_INCLUDES_ONLY_ACTIVITY",
 
-        systemInstruction = buildSystemInstruction(profile, recentJournal),
+        systemInstruction = buildSystemInstruction(profile, recentJournal, researchNotes),
 
         inputTranscription = true,
         outputTranscription = true,
@@ -51,7 +53,8 @@ object TherapistSession {
 
     private fun buildSystemInstruction(
         profile: PatientProfile,
-        recentJournal: List<JournalEntry>
+        recentJournal: List<JournalEntry>,
+        researchNotes: List<ResearchNote> = emptyList()
     ): String = buildString {
         append(TherapistClinicalCore.PROMPT)
         append("\n\n")
@@ -67,7 +70,21 @@ object TherapistSession {
         append("\n\n")
         append(renderJournal(recentJournal))
         append("\n\n")
+        append(renderResearchNotes(researchNotes))
+        append("\n\n")
         append(renderOpeningInstruction(profile))
+    }
+
+    private fun renderResearchNotes(notes: List<ResearchNote>): String {
+        if (notes.isEmpty()) return ""
+        return buildString {
+            append("═══ КАРТА ИНСАЙТОВ И ИССЛЕДОВАНИЙ (то, что ты ранее изучил в интернете) ═══\n")
+            notes.sortedByDescending { it.createdAt }.take(12).forEach { n ->
+                val t = if (n.topic.isNotBlank()) n.topic else n.query
+                append("• ${fmt(n.createdAt)} — $t: ${n.summary.take(300)}\n")
+            }
+            append("\nОпирайся на эти проверенные данные. Если устарели или нужно глубже — вызови web_research снова.\n")
+        }
     }
 
     private fun renderProfile(p: PatientProfile): String {

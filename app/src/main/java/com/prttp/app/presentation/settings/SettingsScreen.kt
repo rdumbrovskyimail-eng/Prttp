@@ -168,8 +168,8 @@ fun SettingsScreen(
     var selectedDropdownModel by rememberSaveable { mutableStateOf(s.model) }
     
     val PREDEFINED_MODELS = listOf(
-        "gemini-3.1-flash-live-preview",
-        "gemini-2.5-flash-native-audio-preview-12-2025"
+        "gemini-3.1-flash-live-preview",                  // актуальная A2A Live
+        "gemini-2.5-flash-native-audio-preview-12-2025"   // предыдущая native-audio Live
     )
     // -----------------------------------
 
