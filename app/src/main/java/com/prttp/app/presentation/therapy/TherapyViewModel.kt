@@ -182,8 +182,15 @@ class TherapyViewModel @Inject constructor(
     }
 
     fun onMicPermissionGranted() {
-        if (!fgsStarted) startForegroundServiceSafe(cachedSettings.forceSpeakerOutput)
+        // FGS уже поднят в startSession() пока экран был активен; из колбэка не трогаем
         if (connected && !_state.value.micMuted) startMic()
+    }
+
+    /** Вызывать из onResume экрана терапии, пока идёт сессия. */
+    fun onScreenResumed() {
+        if (connected && !fgsStarted) {
+            startForegroundServiceSafe(cachedSettings.forceSpeakerOutput)
+        }
     }
 
     private suspend fun connect(freshSession: Boolean) = sessionMutex.withLock {
@@ -222,7 +229,6 @@ class TherapyViewModel @Inject constructor(
 
     private fun startMic() {
         if (!hasMicPermission() || micJob != null) return
-        if (!fgsStarted) startForegroundServiceSafe(cachedSettings.forceSpeakerOutput)
         micJob = viewModelScope.launch {
             audioEngine.startCapture()
             audioEngine.micOutput.collect { chunk -> liveClient.sendAudio(chunk) }
@@ -444,13 +450,19 @@ class TherapyViewModel @Inject constructor(
     }
 
     private fun startForegroundServiceSafe(forceSpeaker: Boolean) {
-        if (!hasMicPermission()) return
+        if (!hasMicPermission()) { logger.w("FGS: нет разрешения на микрофон"); return }
+        if (fgsStarted) return
         runCatching {
             val intent = GeminiLiveForegroundService.startIntent(appContext, forceSpeaker)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) appContext.startForegroundService(intent)
-            else appContext.startService(intent)
+            ContextCompat.startForegroundService(appContext, intent)
             fgsStarted = true
-        }.onFailure { fgsStarted = false; logger.e("FGS start failed: ${it.message}") }
+            logger.d("FGS запущен")
+        }.onFailure {
+            // Старт из фона запрещён системой — НЕ обрываем сессию, просто работаем без FGS,
+            // пока приложение на переднем плане. Поднимем при следующем возврате на экран.
+            fgsStarted = false
+            logger.w("FGS не стартовал (вероятно фон): ${it.message}")
+        }
     }
 
     private fun stopForegroundServiceSafe() {
