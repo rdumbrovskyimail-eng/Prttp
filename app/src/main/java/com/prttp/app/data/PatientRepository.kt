@@ -40,6 +40,10 @@ class PatientRepository @Inject constructor(
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val writeMutex = Mutex()
 
+    /** Ключ Keystore утерян/сменился — переходим в режим защиты от перезаписи (Read-Only). */
+    @Volatile private var storageReadOnly = false
+    val isStorageReadOnly: Boolean get() = storageReadOnly
+
     private val profileFile: File get() = File(context.filesDir, "patient.bin")
     private val journalFile: File get() = File(context.filesDir, "journal.bin")
 
@@ -82,7 +86,12 @@ class PatientRepository @Inject constructor(
     private fun readProfile(): PatientProfile {
         if (!profileFile.exists()) return PatientProfile()
         val blob = runCatching { profileFile.readBytes() }.getOrNull() ?: return PatientProfile()
-        val plain = KeystoreCrypto.decrypt(KEY_PROFILE, blob) ?: return PatientProfile()
+        val plain = KeystoreCrypto.decrypt(KEY_PROFILE, blob)
+        if (plain == null) {
+            storageReadOnly = true
+            android.util.Log.e("PatientRepository", "CRITICAL: Keystore decryption failed for KEY_PROFILE")
+            return PatientProfile()
+        }
         return runCatching {
             json.decodeFromString(PatientProfile.serializer(), plain.decodeToString())
         }.getOrDefault(PatientProfile())
@@ -91,7 +100,12 @@ class PatientRepository @Inject constructor(
     private fun readJournal(): List<JournalEntry> {
         if (!journalFile.exists()) return emptyList()
         val blob = runCatching { journalFile.readBytes() }.getOrNull() ?: return emptyList()
-        val plain = KeystoreCrypto.decrypt(KEY_JOURNAL, blob) ?: return emptyList()
+        val plain = KeystoreCrypto.decrypt(KEY_JOURNAL, blob)
+        if (plain == null) {
+            storageReadOnly = true
+            android.util.Log.e("PatientRepository", "CRITICAL: Keystore decryption failed for KEY_JOURNAL")
+            return emptyList()
+        }
         return runCatching {
             json.decodeFromString(ListSerializer(JournalEntry.serializer()), plain.decodeToString())
         }.getOrDefault(emptyList())
@@ -111,6 +125,10 @@ class PatientRepository @Inject constructor(
         writeMutex.withLock {
             withContext(Dispatchers.IO) {
                 isLoaded.await() // Блокируем гонки данных
+                if (storageReadOnly) {
+                    android.util.Log.e("PatientRepository", "Write aborted (profile): storage is read-only.")
+                    return@withContext
+                }
                 val updated = block(_profile.value).copy(updatedAt = System.currentTimeMillis())
                 persistProfile(updated)
                 _profile.value = updated
@@ -121,6 +139,10 @@ class PatientRepository @Inject constructor(
         writeMutex.withLock {
             withContext(Dispatchers.IO) {
                 isLoaded.await() // Блокируем гонки данных
+                if (storageReadOnly) {
+                    android.util.Log.e("PatientRepository", "Write aborted (journal): storage is read-only.")
+                    return@withContext
+                }
                 val updated = block(_journal.value)
                 persistJournal(updated)
                 _journal.value = updated
@@ -214,7 +236,12 @@ class PatientRepository @Inject constructor(
     private fun readResearch(): List<ResearchNote> {
         if (!researchFile.exists()) return emptyList()
         val blob = runCatching { researchFile.readBytes() }.getOrNull() ?: return emptyList()
-        val plain = KeystoreCrypto.decrypt(KEY_RESEARCH, blob) ?: return emptyList()
+        val plain = KeystoreCrypto.decrypt(KEY_RESEARCH, blob)
+        if (plain == null) {
+            storageReadOnly = true
+            android.util.Log.e("PatientRepository", "CRITICAL: Keystore decryption failed for KEY_RESEARCH")
+            return emptyList()
+        }
         return runCatching {
             json.decodeFromString(ListSerializer(ResearchNote.serializer()), plain.decodeToString())
         }.getOrDefault(emptyList())
@@ -229,6 +256,10 @@ class PatientRepository @Inject constructor(
         writeMutex.withLock {
             withContext(Dispatchers.IO) {
                 isLoaded.await()
+                if (storageReadOnly) {
+                    android.util.Log.e("PatientRepository", "Write aborted (research): storage is read-only.")
+                    return@withContext
+                }
                 val updated = block(_research.value)
                 persistResearch(updated)
                 _research.value = updated
@@ -254,6 +285,7 @@ class PatientRepository @Inject constructor(
             _profile.value = PatientProfile()
             _journal.value = emptyList()
             _research.value = emptyList()
+            storageReadOnly = false
         }
     }
 
